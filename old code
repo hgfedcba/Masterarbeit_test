@@ -1,0 +1,1336 @@
+import numpy as np
+import scipy
+import random
+import logging as log
+import sys
+import coloredlogs
+import time
+import math
+
+from scipy.optimize import minimize
+from typing import NamedTuple
+from gekko import GEKKO
+from numpy import linalg as LA
+
+
+class Rivals(NamedTuple):
+    """A set of rivals with corresponding errors."""
+
+    corr_energies: np.ndarray
+    """Potential values for the correct states."""
+
+    incorr_energies: np.ndarray
+    """Potential values for the corresponding incorrrect states."""
+
+    error_reduction: np.ndarray
+    """Absolute error difference between the correct and incorrect state."""
+
+
+def rnmbr():
+    return random.randint(1, 10)
+
+
+def out(a, b):
+    print("loss: " + b.roundhelp(a[0]) + "weights: " + repr(a[1]).ljust(45) + "loss durch slack: " + b.roundhelp(a[2].sum() * b.slack_factor) + "" + repr(a[2]))
+
+
+class ConstraintGeneration():
+    """implements constraint generation to find optimal weights.
+    Args:
+        slack_factor:
+            This constant weights the impact of the slack variables on the
+            optimization goal. A high slack_factor leads to small slack values
+            and mostly a better optimization.
+        loss_func:
+            This switches to the desired loss function. See below for
+            an explanation of the different loss functions.
+        margin:
+            If dynamic_margin is false this constant gives the margin by which
+            all constraints have to be fulfilled.
+        opt_acc:
+            This is the optimization accuracy for both constraints and loss
+            function. The optimizer can violate Constraints up to this
+            constant, which is why this is used in constraints.
+        inf_rep:
+            Full name is infinity replacement. I can get infinity values from
+            outside and this is used to deal with them.
+        aac:
+            append_all_constraints. If this is true all constraints are always
+            appended. It might be reasonable to not do this, but True is a
+            good default value.
+        cnab:
+            constraint not append barrier. If not all constraints are appended
+            it is still unreasonable to leave out all that are fulfilled and
+            this gives the margin by which they have to be fulfilled to be
+            left out.
+        allow_duplicates:
+            If this is False I check for duplicate constraints. This should
+            always be True except if there are very few constraints total and a
+            high percentage of all constraints are actually added to the
+            solver.
+        solver:
+            The solver the gekko suit uses. There are 3 solvers 1-3 and 0 uses
+            all solver. There are 2 more solver which require a licence. Only
+            1 works but it seems to be the best for us anyways.
+        remote:
+            gekko solves online by default, but I don't want
+            to use that so default is False.
+        d_margin:
+            dynamic margin. If this is true I use the error reduction from
+            outside to have a different margin depending on the error of
+            given configuration.
+        starting_values:
+            -
+        d_starting_values:
+            -
+        loss_multiplier:
+            This constant is multiplied to the loss function. This is done so
+            constraints and loss function are in the same general area which
+            hopefully improves accuracy and convergence
+        del_constraints:
+            If this is True we completely delete fulfilled constraints. This
+            should be used with great care.
+        con_del_barrier:
+            constraint delete barrier. See cnab.
+        con_del_max:
+            not implemented yet.
+        error_red_func:
+            There are different ways to use the error reduction term to get
+            dynamic margins. Here the way is chosen. Still experimental.
+
+    """
+
+    def __init__(self, slack_factor=10, u_e_factor=1/1000, loss_func=0,
+                 margin=1, opt_acc=1e-8, inf_rep=1e5, aac=False, cnab=0.1,
+                 allow_duplicates=True, solver=4, remote=False, d_margin=False,
+                 starting_value=0.5, d_starting_value=False,
+                 loss_multiplier=1/100, del_con=False, con_del_barrier=0,
+                 con_del_max=-1, error_red_func=1, unknown_energy_func=2,
+                 scaling_weight_factor=2, gekko_learn_unknown_energies=False,
+                 debug_run=False, **kwargs):
+
+        if not debug_run:
+            super().__init__(**kwargs)
+        self.slack_factor = slack_factor
+        self.u_e_factor = u_e_factor
+        self.loss_function = loss_func
+        self.margin = margin
+        self.optimization_accuracy = opt_acc
+        self.infinity_replacement = inf_rep
+        self.append_all_constraints = aac
+        self.constraint_not_append_barrier = cnab
+        self.allow_duplicates = allow_duplicates
+        self.solver = solver
+        self.remote = remote
+        self.dynamic_margin = d_margin
+        self.starting_value = starting_value
+        self.dynamic_starting_value = d_starting_value
+        self.scaling_weight_factor = scaling_weight_factor
+        self.gekko_learn_unknown_energies = gekko_learn_unknown_energies
+
+        self.loss_multiplier = loss_multiplier
+        self.delete_constraints = del_con
+        self.constraint_delete_barrier = con_del_barrier
+        self.constraint_delete_maximum = con_del_max
+        self.error_reduction_f = error_red_func
+        # realiststically this is always 2
+        self.unknown_energy_func = unknown_energy_func
+
+        self.parameter_string = "Parameter-log: slack_factor: ", \
+                                self.slack_factor, \
+                                " \tu_e_factor:", self.u_e_factor, \
+                                " \tloss_function:", self.loss_function, \
+                                " \tmargin:", self.margin, \
+                                " \toptimization_accuracy:",\
+                                self.optimization_accuracy, \
+                                " \tinfinity_replacement:",\
+                                self.infinity_replacement,\
+                                " \tappend_all_constraints:",\
+                                self.append_all_constraints, \
+                                " \tconstraint_not_append_barrier:",\
+                                self.constraint_not_append_barrier,\
+                                " \tallow_duplicates:", self.allow_duplicates,\
+                                " \tsolver:", self.solver, " \tremote:",\
+                                self.remote, " \tdynamic_margin:",\
+                                self.dynamic_margin, " \tstarting_value:",\
+                                self.starting_value,\
+                                " \tdynamic_starting_value:",\
+                                self.dynamic_starting_value,\
+                                " \tloss_multiplier:", self.loss_multiplier,\
+                                " \tdelete_constraints:",\
+                                self.delete_constraints, \
+                                " \tconstraint_delete_barrier:",\
+                                self.constraint_delete_barrier,\
+                                " \tconstraint_delete_maximum:",\
+                                self.constraint_delete_maximum, \
+                                " \terror_reduction_f:",\
+                                self.error_reduction_f,\
+                                " \tunknown_energy_func:",\
+                                self.unknown_energy_func, \
+                                " \tscaling_weight_factor:", \
+                                self.scaling_weight_factor
+        self.parameter_string = ''.join(str(s) for s in self.parameter_string)
+        self.parameter_string += "\n"
+
+        self.log_string = ""
+        self.gekko = -1
+
+        """
+        In debug-runs parts of the usual output are abused for debugging.
+        """
+        self.debug_run = debug_run
+
+        # searching for some obvious bugs
+        if self.infinity_replacement * 10 > 1 / self.optimization_accuracy:
+            log.error('optimization_accuracy is not small enough compared to '
+                      'infinity_replacement')
+
+        assert self.append_all_constraints or \
+            self.constraint_not_append_barrier >= 0
+        assert self.dynamic_margin or self.margin >= 0
+        assert not self.delete_constraints or \
+            self.constraint_delete_barrier >= 0
+
+    def params_str(self):
+        return self.parameter_string
+
+    def optimizer(self, initial_weights, fake_initial_u_e):
+        # printing parameters to log
+        log.info(self.parameter_string)
+
+        # setting some initial variables
+        # unknown_energies = graph.unknown_energies
+        weights = initial_weights
+        n_weights = weights.size  # number of weights/potential functions
+
+        count = 1  # number of iteration
+
+        # the maximum of all energies/corr_energies over all time.
+        # This is compared with infinity_replacement.
+        p_max = 0
+
+        e_max = 0
+        e_min = 10e10
+
+        # If correct_energies have infinity in a potential then the
+        # corresponding weight has to be zero to minimize the objective. I
+        # implement this by setting the upper bound of that weight to 0. Gekko
+        # automatically removes is later.
+        weight_upper_bound = np.full_like(np.ones(n_weights), np.infty)
+
+        # some kind of infinity_replacement used
+        some_kind_of_infinity_replacement_used = False
+
+        #
+        accumulated_time = 0
+
+        # "fixes" warning
+        energies = np.empty(1)
+        margin_vector = np.empty(1)
+        slack = np.empty(1)
+        nan_log_corr = np.empty(1)
+        nan_log_incorr = np.empty(1)
+
+        # t1 has to be initialized once and here is a reasonable place
+        t1 = time.clock()
+
+        unknown_energies = np.copy(fake_initial_u_e)
+        self.old_unknown_energies = np.copy(unknown_energies)
+
+        self.old_weights = weights
+
+        assert unknown_energies.size == n_weights
+
+        while True:
+            # Here a python generator is used. Effectively this loop is
+            # repeated indefinitely while other code is executed after a loop.
+
+            # get the batch from the outside
+            corr_energies_input, incorr_energies_input, error_reduction_input = yield
+            # if use_unknown_energies == False, corr_energies and
+            # incorr_energies will contain NaN values in places where the
+            # beta/unknown_energies should be used. You have to set
+            # graph.unknown_energies before the yield. Unknown energies
+            # Dimension is the number of potentials
+
+            t2 = time.clock()
+
+            if self.scaling_weight_factor != 1:
+                self.scaling_weight_factor = math.log(count)
+
+            ce = np.copy(corr_energies_input)
+            ince = np.copy(incorr_energies_input)
+            error_reduction = np.copy(error_reduction_input)
+
+            # FIXME: Important note. This code works by remembering what entries contained an "nan" entry which is saved in nan_log_... and saving the difference energies = incorr-corr.
+            #  In principle I think that saving only corr and incorr energies gives a better code and I did impkement it that way, but that slowed down the code a lot.
+            #  I think it was due to more expensive derivatives which wouldn't be a problem now, but at this point the old code works too god to change it.
+
+            # find out where unknown_energies are used
+            if count > 1:
+                nan_log_corr = np.concatenate(
+                    (nan_log_corr, np.isnan(ce)), axis=0)
+                nan_log_incorr = np.concatenate(
+                    (nan_log_incorr, np.isnan(ince)), axis=0)
+            else:
+                nan_log_corr = np.isnan(ce)
+                nan_log_incorr = np.isnan(ince)
+
+            # overwrite nan in energies with old unknown_energies
+            for k in range(unknown_energies.size):
+                ce[:, k] = np.where(
+                    np.isnan(ce[:, k]), unknown_energies[k],
+                    ce[:, k])
+                ince[:, k] = np.where(
+                    np.isnan(ince[:, k]), unknown_energies[k],
+                    ince[:, k])
+
+            batch_size = ce.shape[0]
+
+            p_max = \
+                max(p_max, np.amax(np.absolute(ce
+                                               [np.isfinite(ce)])),
+                    np.amax(np.absolute(
+                        ince[np.isfinite(ince)])))
+
+            e_max = max(e_max, np.amax(error_reduction))
+            e_min = min(e_min, np.amin(error_reduction))
+
+            some_kind_of_infinity_replacement_used = max(
+                some_kind_of_infinity_replacement_used,
+                np.amax(np.isinf(ce)),
+                np.amax(np.isinf(ince)))
+
+            # energies contains every constraint ever added to the program.
+            # Here this is ascertained
+            if count > 1:
+                energies = np.concatenate((energies, -ce +
+                                           ince), axis=0)
+            else:
+                energies = -ce + ince
+
+            # If a potential function has infinite potential for a correct
+            # configuration set the maximum corresponding weight to 0
+            for k in range(n_weights):
+                if not np.min(np.isfinite(
+                        np.where(energies > 0, 0, energies)), axis=0)[k]:
+                    some_kind_of_infinity_replacement_used = True
+                    weight_upper_bound[k] = 0
+
+            # sets +/-infty in energies to +/- infty_replacement
+            energies[np.isinf(np.where(energies < 0, 0, energies))] = \
+                self.infinity_replacement
+            energies[np.isinf(np.where(energies > 0, 0, energies))] = \
+                - self.infinity_replacement
+
+            # The next 2 loops deal with the margin used for the constraints.
+            # The idea is that margin vector contains the correct margin for
+            # the corresponding potential differences stored in energies. I use
+            # this even if I use a constant margin since this improves
+            # readability of the code later on.
+            if not self.dynamic_margin:
+                error_reduction = np.full(batch_size, self.margin)
+            else:
+                error_reduction = \
+                    self.error_reduction_function(error_reduction)
+
+            if count == 1:
+                margin_vector = error_reduction
+            else:
+                margin_vector = np.concatenate(
+                    (margin_vector, error_reduction), axis=0)
+
+            # some code that deletes margins
+            if self.delete_constraints:
+                delete_count = 0
+                for k in range(energies.shape[0]):
+                    if k >= energies.shape[0]:
+                        continue
+
+                    intermediate_value = self.constraint(
+                        weights @ energies[k, :], 0, margin_vector[k])
+
+                    if (intermediate_value >= self.constraint_delete_barrier
+                            and (self.constraint_delete_maximum == -1
+                                 or delete_count <=
+                                 self.constraint_delete_maximum)):
+                        energies = np.delete(energies, k, axis=0)
+                        margin_vector = np.delete(margin_vector, k, axis=0)
+                        k -= 1
+                        delete_count += 1
+
+            if not self.allow_duplicates:
+                energies_copy_0 = np.copy(energies)
+                energies_copy = np.copy(energies)
+
+                for k in range(energies.shape[0], -1, -1):
+                    for l in range(k+1, energies.shape[0]):
+                        if np.all(np.array_equal(energies[k, :], energies[l, :])):
+                            energies = np.delete(energies, l, axis=0)
+                            margin_vector = np.delete(margin_vector, l, axis=0)
+                            nan_log_corr = np.delete(nan_log_corr, l, axis=0)
+                            nan_log_incorr = np.delete(nan_log_incorr, l, axis=0)
+                        if l == energies.shape[0]-1:
+                            break
+
+                # FIXME: NOTE: np.unique sortiert
+                energies_copy, returned_indices = np.unique(energies_copy, return_index=True, axis=0)
+                # margin_vector = margin_vector[returned_indices]
+                # nan_log_corr = nan_log_corr[returned_indices]
+                # nan_log_incorr = nan_log_incorr[returned_indices]
+
+                assert np.all(np.equal(energies_copy_0[returned_indices], energies_copy))
+                assert np.all(np.equal(energies_copy, np.unique(energies, axis=0)))
+                # for k in range(margin_vector.shape[0]):
+                #     if not np.any(returned_indices == k):
+                #         margin_vector = np.delete(margin_vector, k, 0)
+                #         nan_log_corr = np.delete(nan_log_corr, k, 0)
+                #         nan_log_incorr = np.delete(nan_log_incorr, k, 0)
+
+            n_all_constr = energies.shape[0]
+            n_used_constr = 0
+
+            if self.solver < 4:
+                # check datatype
+                assert False
+                # here gekko config starts. I initialize a new gekko instance every
+                # iteration since I have trouble otherwise.
+                # https://gekko.readthedocs.io/en/latest/global.html
+                w = []
+                u = []
+                s = []
+
+                # Initialize gekko. Per gekko default the problem is solved online.
+                # Some options only work online apparently.
+                # gekko = GEKKO(remote=self.remote)
+                # if I want to force online solving
+                gekko = GEKKO(remote=True)
+
+                self.gekko = gekko
+
+                # Initialize variables
+                # weights
+                for k in range(n_weights):
+                    if weight_upper_bound[k] == np.infty:
+                        w.append(gekko.Var(lb=0, ub=1.0e20, value=weights[k]))
+                    else:
+                        w.append(gekko.Var(lb=0, ub=0, value=weights[k]))
+                # unknown energies
+                if self.gekko_learn_unknown_energies:
+                    for k in range(unknown_energies.size):
+                        u.append(gekko.Var(lb=-1.0e20, ub=1.0e20, value=unknown_energies[k]))
+
+                    gekko_matrix = gekko.Array(gekko.Var, (n_all_constr, n_weights))
+
+                    for k in range(n_weights):
+                        for i in range(n_all_constr):
+                            gekko_matrix[i, k] = energies[i, k]
+                            if nan_log_corr[i, k]:
+                                gekko_matrix[i, k] = gekko_matrix[i, k] + unknown_energies[k]-u[k]
+                            if nan_log_incorr[i, k]:
+                                gekko_matrix[i, k] = gekko_matrix[i, k] - unknown_energies[k]+u[k]
+
+                else:
+                    u = np.copy(unknown_energies)
+                    gekko_matrix = np.copy(energies)
+
+                # https://gekko.readthedocs.io/en/latest/global.html#imode
+                gekko.options.IMODE = 3
+
+                """
+                "Solver options: 0 = Benchmark All Solvers, 1-5 = Available Solvers
+                Depending on License. Solver 1-3 are free."
+                The first is the only one working offline
+                """
+                gekko.options.SOLVER = self.solver
+
+                # objective tolerance, default 1.0e-6
+                gekko.options.OTOL = self.optimization_accuracy
+                # restraint tolerance default 1.0e-6
+                gekko.options.RTOL = self.optimization_accuracy
+
+                # m.options.DIAGLEVEL = 6  # Input 0-10, default 0. Slows down the
+                # program but gives more detailed output to find bugs.
+                # m.options.MAX_ITER = 10000  # Default 100
+                # m.options.MAX_TIME = 1.0e20  # Default 1.0e20
+                gekko.options.REDUCE = 1  # tries to reduce the complexity of the
+                # problem by analysing data before sending it to the solver.
+                # Default 0
+                # m.options.WEB = 0 # disables creation of web interfaces
+
+                n_gekko_equations = 0
+                # adding constraints to gekko
+                for k in range(n_all_constr):
+                    if self.append_all_constraints:
+                        if k < n_all_constr - batch_size:
+                            # if possible initialize slack with the result of the
+                            # last iteration.
+                            s.append(gekko.Var(lb=0, ub=1.0e20, value=slack[k]))
+                        else:
+                            s.append(gekko.Var(lb=0, ub=1.0e20,
+                                               value=self.starting_value))
+
+                        weights_times_energies = np.dot(
+                            np.transpose(np.asarray(w), dtype=np.float32),
+                            gekko_matrix[k, :])
+
+                        slack_variables = np.transpose(
+                            np.asarray(s[n_gekko_equations], dtype=np.float32))
+
+                        gekko.Equation(self.constraint(weights_times_energies,
+                                                       slack_variables,
+                                                       margin_vector[k]) >= 0)
+
+                        n_gekko_equations += 1
+                        # in one line:
+                        # m.Equation(self.constraint(np.dot(np.transpose(
+                        # np.asarray(x[:n_weights])), energies[k, :]),
+                        # np.transpose(np.asarray(x[n_weights +
+                        # m._equations.__len__()])), margin_vector[k]) >= 0)
+
+                    # only add constraints that are not already fulfilled by cnab
+                    elif (self.constraint(weights @ energies[k, :], 0,
+                                          margin_vector[k]) <
+                          self.constraint_not_append_barrier):
+                        # Note: dynamic starting value only implemented for aac
+                        s.append(gekko.Var(lb=0, ub=1.0e20,
+                                           value=self.starting_value))
+
+                        weights_times_energies = np.dot(
+                            np.transpose(np.asarray(w), dtype=np.float32),
+                            gekko_matrix[k, :])
+
+                        slack_variable = np.transpose(
+                            np.asarray(s[n_gekko_equations], dtype=np.float32))
+
+                        gekko.Equation(self.constraint(weights_times_energies,
+                                                       slack_variable,
+                                                       margin_vector[k]) >= 0)
+                        n_gekko_equations += 1
+
+                n_used_constr = n_gekko_equations
+                assert n_used_constr == len(s)
+                if n_used_constr == 0:
+                    print("There are no constraints used, optimization stops")
+                    # break
+                gekko.Obj(self.get_loss_func(np.asarray(w, dtype=np.float32),
+                                             np.transpose(np.asarray(s, dtype=np.float32)),
+                                             np.transpose(np.asarray(u, dtype=np.float32)),
+                                             n_used_constr))
+
+                # Note: Gekko can crash and probably also throw exceptions.
+                #  I should look into that
+                # the actual solving with gekko
+                log.warning("My Code now starts the solver")
+                gekko.solve(disp=False)  # Solve
+
+                weights = np.transpose(np.asarray(w, dtype=np.float32))[0]
+                if self.gekko_learn_unknown_energies:
+                    unknown_energies = np.transpose(
+                        np.asarray(u, dtype=np.float32))[0]
+
+                slack = np.transpose(np.asarray(s, dtype=np.float32))[0]
+                loss = self.get_loss_func(
+                    weights, slack, unknown_energies, n_used_constr)
+            else:
+                import scipy
+                from scipy.optimize import minimize
+                n_unknown = unknown_energies.size
+
+                constraints = []
+                nth_constr = 0
+
+                for k in range(n_all_constr):
+                    # FIXME: It should be possible to speed this up, but doesn't seem necessary
+                    # add constraints, but only if "append_all_constraints" is true or they are not fulfilled with margin constraint_append_barrier
+                    # higher barrier -> more constraints
+                    if self.debug_run:
+                        f = self.scipy_constraint(energies[k, :], margin_vector[k], nan_log_corr[k, :], nan_log_incorr[k, :], unknown_energies, nth_constr)
+                        partial_x = np.append(np.zeros(nth_constr+1), unknown_energies)
+                        m2 = f(np.append(weights, partial_x))
+                        m = weights @ energies[k, :] - margin_vector[k] - self.optimization_accuracy
+                        m3 = self.constraint(weights @ energies[k, :], 0, margin_vector[k])
+                        assert m2 == m
+                        assert m3 == m
+
+                    if self.append_all_constraints or weights @ energies[k, :] - margin_vector[k] - self.optimization_accuracy < self.constraint_not_append_barrier:
+                        # constraints.append({'type': 'ineq', 'fun': self.scipy_constraint(energies[k, :], margin_vector[k], nan_log_corr[k, :], nan_log_incorr[k, :], unknown_energies, nth_constr)})
+                        constraints.append(
+                            {'type': 'ineq', 'fun': self.scipy_constraint(energies[k, :], margin_vector[k], nan_log_corr[k, :], nan_log_incorr[k, :], unknown_energies, nth_constr),
+                             'jac': self.scipy_constraint_derivative(energies[k, :], margin_vector[k], nan_log_corr[k, :], nan_log_incorr[k, :], unknown_energies, nth_constr)})
+
+                        nth_constr += 1
+
+                n_used_constr = nth_constr
+                n_slack = n_used_constr
+                lower_bound = np.append(np.append(
+                    np.zeros(n_weights), np.zeros(n_slack)),
+                    np.full_like(np.ones(n_weights), -np.infty))
+                upper_bound = np.full_like(np.ones(
+                    n_weights + n_slack + n_unknown), np.infty)
+                assert lower_bound.shape == upper_bound.shape
+                bounds = scipy.optimize.Bounds(lower_bound, upper_bound)
+
+                # the first n_weights entries of x are the weights that we want to calculate. After that we have the slack variables for the different equations. One for each equation
+                l = len(constraints)
+                """
+                assert l == n_used_constr
+                """
+                f = self.scipy_get_loss_func(n_weights, n_slack, n_unknown)
+                jac_f = self.scipy_get_loss_func_derivative(n_weights, n_slack, n_unknown)
+                """
+                def jac_f(x):
+                    der = np.zeros_like(x)
+                    der[:n_weights] = x[:n_weights]
+                    der[n_weights:n_weights + n_slack] = self.slack_factor / l
+                    der[-n_weights:] =
+                    return der
+
+                result = minimize(f, method='SLSQP', jac=jac_f, x0=np.append(weights, np.zeros(energies.shape[0])), bounds=bounds, constraints=constraints,
+                                  options={'maxiter': 10000, 'ftol': self.optimization_accuracy}, tol=self.optimization_accuracy)
+                """
+
+                x0 = np.append(weights, np.append(np.full(n_slack, self.starting_value), unknown_energies))
+                result = minimize(f, method='SLSQP', jac=jac_f, x0=x0, bounds=bounds, constraints=constraints,
+                                  options={'maxiter': 10000, 'ftol': self.optimization_accuracy}, tol=self.optimization_accuracy)
+
+                if not result.success:
+                    log.critical('Apparently something failed! %s', result)
+                    # optimization mostly fails when f return too big values, so we divide f by a bigger factor
+                    # divide f by 10 ?!
+
+                weights = result.x[:n_weights]
+                slack = result.x[n_weights:n_weights + n_slack]
+                unknown_energies = result.x[n_weights + n_slack:]
+                loss = result.fun
+
+            for k in range(n_weights):
+                for i in range(n_all_constr):
+                    if nan_log_corr[i, k]:
+                        energies[i, k] = \
+                            energies[i, k] + self.old_unknown_energies[k] - unknown_energies[k]
+                    if nan_log_incorr[i, k]:
+                        energies[i, k] = \
+                            energies[i, k] - self.old_unknown_energies[k] + unknown_energies[k]
+
+            loss_from_slack = self.get_loss_func(
+                np.zeros(1), slack, np.zeros(1),
+                n_used_constr)
+            loss_from_u_e = self.get_loss_func(
+                np.zeros(1), np.zeros(1), unknown_energies, n_used_constr)
+
+            # only used internally since Oliver already has this as a metric
+            weight_update_percent = np.linalg.norm(self.old_weights - weights) / (
+                    np.linalg.norm(self.old_weights) +
+                    np.linalg.norm(weights)) * 200
+
+            unknown_update_percent = np.linalg.norm(self.old_unknown_energies - unknown_energies) / (
+                    np.linalg.norm(self.old_unknown_energies) +
+                    np.linalg.norm(unknown_energies)) * 200
+
+            n_not_small_weights = sum(weights > 1e-5)
+
+            n_essentially_zero_slack = sum(np.where(slack < self.optimization_accuracy, 1, 0))
+
+            self.log_string = "loss: ", self.d_as_r_s(loss, 10), \
+                              "\t\tloss from slack: ", \
+                              self.d_as_r_s(loss_from_slack, 10), \
+                              "\t\tloss from unknown_energies: ", \
+                              self.d_as_r_s(loss_from_u_e, 10), \
+                              "\nweights: ", \
+                              np.array2string(weights, precision=3,
+                                              separator=',',
+                                              suppress_small=True), \
+                              "\nunknown_energies: ", \
+                              np.array2string(unknown_energies, precision=3,
+                                              separator=',',
+                                              suppress_small=True), \
+                              "\nweight_delta: ", \
+                              self.d_as_r_s(weight_update_percent, 10), \
+                              "\nunknown_delta: ", \
+                              self.d_as_r_s(unknown_update_percent, 10)
+            self.log_string = ''.join(str(s) for s in self.log_string)
+            self.log_string += "\n"
+            log.debug(self.log_string)
+
+            # log.debug("slack: %s", slack)
+            if (p_max > self.infinity_replacement / 100
+                    and some_kind_of_infinity_replacement_used is True):
+                log.warning("Infty replacement too small compared to %f",
+                            p_max)
+
+            if count % 5 == 0:
+                log.debug("**************************************************")
+                self.log_string = "Count: ", count, "\tp_max = ", p_max, \
+                                  "\te_max = ", e_max, \
+                                  "\te_min = ", e_min, ",\tslack_max = ", \
+                                  max(slack), ", \taverage_slack_value =  ", \
+                                  np.average(slack), \
+                                  ",\tnumber_of_zero_constraints = ", \
+                                  sum(np.where(slack == 0, 1, 0)), \
+                                  ",\n\tnumber_of_used_constraints = ", \
+                                  n_used_constr, \
+                                  "\t number_of_constraints = ", \
+                                  n_all_constr
+                self.log_string = ''.join(str(s) for s in self.log_string)
+                log.debug(self.log_string)
+                if np.min(weight_upper_bound) == 0:
+                    log.debug("There are correct positions with infinite"
+                              " potential, so these weights are set to 0:")
+                    log.debug(np.where(weight_upper_bound == 0)[0])
+                log.debug("**************************************************")
+
+            self.old_unknown_energies = np.copy(unknown_energies)
+            self.old_weights = np.copy(weights)
+
+            count += 1
+
+            duration_step = time.clock() - t1
+            duration_opt = time.clock() - t2
+            accumulated_time += duration_opt
+            t1 = time.clock()
+
+            yield loss, weights, unknown_energies, slack
+
+    def constraint(self, weights_times_energies, slack_variable, margin):
+        """If slack-variable is less than margin this assures that the correct
+        configuration has lower energy than the best rival configuration. I
+        subtract self.optimization_accuracy to make sure that the constraints
+        are really fulfilled and not only up to accuracy.
+        """
+        return (weights_times_energies + slack_variable -
+                margin - self.optimization_accuracy)  # >= 0
+
+    # This seems to give identical output while beeing slower. Also I do not trust this
+    def scipy_constraint(self, energies, margin, nan_log_corr, nan_log_incorr, unknown_energies, nth_constr):
+        # return lambda x: x[:n_weights] @ energies[k, :] + x[n_weights + k] - margin - self.optimization_accuracy  # >= 0
+        n_weights = unknown_energies.__len__()
+        def f(x):
+            # 0 <= nth_constr <= 15
+            assert len(x) - 2 * n_weights - nth_constr > 0
+            new_e = np.copy(energies)
+            for j in range(n_weights):
+                if nan_log_corr[j]:
+                    new_e[j] = new_e[j] + unknown_energies[j] - x[-n_weights + j]
+                if nan_log_incorr[j]:
+                    new_e[j] = new_e[j] - unknown_energies[j] + x[-n_weights + j]
+            return x[:n_weights] @ new_e + x[n_weights + nth_constr] - margin - self.optimization_accuracy  # >= 0
+        return f
+    """
+    # proven to be bugged, this implemetation remembers the first x input for the unknown energies and ignores new unknown energy values
+    def scipy_constraint2(self, energies, margin, nan_log_corr, nan_log_incorr, unknown_energies, nth_constr):
+        # return lambda x: x[:n_weights] @ energies[k, :] + x[n_weights + k] - margin - self.optimization_accuracy  # >= 0
+        n_weights = unknown_energies.__len__()
+        new_e = np.copy(energies)
+        new_nan_log_corr = np.copy(nan_log_corr)
+        new_nan_log_incorr = np.copy(nan_log_incorr)
+        first_call = True
+
+        def f(x):
+            # This let's the function f access outer scope variables. Sometimes this works normally sometimes it does not so I am very confused.
+            nonlocal first_call
+            for j in range(n_weights):
+                # x[-n_unknown+j] is the j-th unknown_energy
+                if new_nan_log_corr[j] and first_call:
+                    new_e[j] = new_e[j] + unknown_energies[j] - x[-n_weights + j]
+                if new_nan_log_incorr[j] and first_call:
+                    new_e[j] = new_e[j] - unknown_energies[j] + x[-n_weights + j]
+                first_call = False
+            return x[:n_weights] @ new_e + x[n_weights + nth_constr] - margin - self.optimization_accuracy  # >= 0
+
+        return f
+    """
+    def scipy_constraint_derivative(self, energies, margin, nan_log_corr, nan_log_incorr, unknown_energies, nth_constr):
+        # return lambda x: x[:n_weights] @ energies[k, :] + x[n_weights + k] - margin - self.optimization_accuracy  # >= 0
+        n_weights = unknown_energies.size
+
+        def f(x):
+            new_e = np.copy(energies)
+            out = np.zeros(x.size)
+            for j in range(n_weights):
+                if nan_log_corr[j]:
+                    new_e[j] = new_e[j] + unknown_energies[j] - x[-n_weights + j]
+                    out[-n_weights + j] = out[-n_weights + j] - x[j]
+                if nan_log_incorr[j]:
+                    new_e[j] = new_e[j] - unknown_energies[j] + x[-n_weights + j]
+                    out[-n_weights + j] = out[-n_weights + j] + x[j]
+
+                out[:n_weights] = new_e
+                out[n_weights + nth_constr] = 1
+            return out
+
+        return f
+
+    def loss_0(self, weights, slack_sum, u_e_part, slack_count):
+        w = self.old_weights
+        if np.array_equal(np.zeros(1), weights):
+            w = np.zeros(1)
+        return ((weights - w) @ (weights - w) * self.scaling_weight_factor + self.slack_factor * slack_sum /
+                slack_count + self.u_e_factor * u_e_part) * self.loss_multiplier
+
+    def loss_1(self, weights_sum: float, slack_sum, u_e_part, slack_count):
+        """This corresponds to minimizing 1-norm of the weights + sum of
+        slack. There are some weighting factors involved.
+        """
+        # FIXME: wrong
+        return (weights_sum + self.slack_factor * slack_sum / slack_count + self.u_e_factor * u_e_part) * \
+               self.loss_multiplier
+
+    def loss_2(self, weights_squared_sum, slack_sum,
+               u_e_part, slack_count):
+        """This corresponds to minimizing 2-norm of the weights + sum of slack.
+        There are some weighting factors involved.
+        """
+        # FIXME: wrong
+        return (weights_squared_sum + self.slack_factor * slack_sum /
+                slack_count + self.u_e_factor * u_e_part) * self.loss_multiplier
+
+    def get_u_e_func(self, unknown_energies):
+        if unknown_energies.size == 1:
+            return 0
+        oue = unknown_energies - self.old_unknown_energies
+        if self.unknown_energy_func == 1:
+            h = 0
+            for k in range(unknown_energies.size):
+                if isinstance(oue[0], int) or isinstance(oue[0], float):
+                    h += math.fabs(oue[k])
+                    assert False
+                else:
+                    h += self.gekko.abs3(oue[k])
+            return h
+        if self.unknown_energy_func == 2:
+            h = 0
+            for k in range(unknown_energies.size):
+                h += oue[k] * oue[k]
+            return h
+        if self.unknown_energy_func == 0:
+            h = 0
+            for k in range(unknown_energies.size):
+                h += unknown_energies[k] * unknown_energies[k]
+            return h
+
+    def get_loss_func(self, weights, slack, unkown_energies, slack_count):
+        """Gets the relevant loss function."""
+        # Fixme: It seems like bleow line works in tests, but only because
+        #  gekko can ignore the absolute value. If that is not certain it
+        #  doesn't find a solution...
+        z = self.get_u_e_func(unkown_energies)
+        if self.loss_function == 0:
+            return self.loss_0(weights, slack.sum(), z, slack_count)
+        elif self.loss_function == 1:
+            return self.loss_1(weights.sum(), slack.sum(), z, slack_count)
+        elif self.loss_function == 2:
+            return self.loss_2(weights @ weights, slack.sum(), z, slack_count)
+
+    def scipy_get_loss_func(self, n_weights, n_slack, n_unknown):
+        return lambda x: self.get_loss_func(x[:n_weights], x[n_weights:n_weights + n_slack], x[n_weights + n_slack:n_weights + n_slack + n_unknown], n_slack)
+
+    def scipy_get_loss_func_derivative(self, n_weights, n_slack, n_unknown):
+        def f(x):
+            first_part = np.ones(n_weights)
+            second_part = np.ones(n_slack)
+            third_part = np.ones(n_unknown)
+            if self.loss_function == 0:
+                first_part = 2 * (x[:n_weights] - self.old_weights) * self.scaling_weight_factor
+            elif self.loss_function == 1:
+                assert True is True
+            elif self.loss_function == 2:
+                first_part = 2 * x[:n_weights]
+
+            second_part = second_part * self.slack_factor / n_slack
+
+            if self.unknown_energy_func == 0:
+                third_part = 2 * x[n_weights + n_slack:n_weights + n_slack + n_unknown]
+            elif self.unknown_energy_func == 1:
+                assert False
+            elif self.unknown_energy_func == 2:
+                third_part = 2 * (x[n_weights + n_slack:n_weights + n_slack + n_unknown] - self.old_unknown_energies)
+            third_part = third_part * self.u_e_factor
+            """
+            assert first_part.__sizeof__() == n_weights
+            assert second_part.__le__() == n_slack
+            assert third_part.__sizeof__() == n_unknown
+            """
+            return self.loss_multiplier * np.append(np.append(first_part, second_part), third_part)
+
+        return f
+
+    def error_reduction_function(self, x):
+        """An error reduction function that makes sense to me.
+        For x in [100,3000] the output is 0.2-2
+        In a concrete test values ranged from 0.6 to 1.5.
+        """
+        if self.error_reduction_f == 1:
+            return np.log(x / 500 + 1)
+        raise RuntimeError('I guess this should never happen?')
+
+    @staticmethod
+    def d_as_r_s(x, space):
+        """Returns double as rounded string with spaces to the right for better
+        alignment.
+        """
+        return repr(int(10000 * x) / 10000).rjust(space)
+
+
+if __name__ == '__main__':
+    # log.root.setLevel(log.DEBUG)
+    log.basicConfig(stream=sys.stderr, level=log.DEBUG, format='%(asctime)s %(message)s')
+    coloredlogs.install(level='DEBUG', fmt='%(asctime)s %(message)s')
+
+    random.seed(7645)
+    np.random.seed(7645)
+
+    cg = ConstraintGeneration()
+
+    number_of_inputs = 5
+    # number_of_inputs = 10
+
+    input_batch_size = 16
+    input_length = 44
+    # input_length = 50
+
+    # number_of_inputs = 2
+    # input_batchsize = 1
+    # input_length = 2
+
+    # number_of_npinftys = math.floor(input_length/8)
+    number_of_np_inftys = 0
+    np_infty_sign = 1
+
+    number_of_np_nan = math.floor(input_length / 6) * input_batch_size
+    # number_of_npnan = 2
+
+    input0 = []
+    input = []
+    input2 = []
+
+    positions_of_np_inftys = []
+    positions_of_np_nan = []
+
+    for i in range(number_of_np_inftys):
+        positions_of_np_inftys.append((np.random.randint(0, input_batch_size - 1), np.random.randint(0, input_length - 1)))
+
+    random.seed(7645)
+    np.random.seed(7645)
+
+    # FIXME: more complicated
+    initial_unknown_energies = 200 * (np.random.random(input_length)-0.5)
+    # initial_unknown_energies = np.ones(input_length)
+
+    opt = cg.optimizer(np.zeros((1, input_length))[0], initial_unknown_energies)
+    cg.debug_run = True
+    cg.solver = 4
+    cg.append_all_constraints = True
+    cg.scaling_weight_factor = 1
+    opt.__next__()
+
+    t1 = time.clock()
+    for i in range(number_of_inputs):
+        # erstes tuppel soll weniger weight haben als das zweite
+
+        input0.append(np.zeros((input_batch_size, input_length)))
+
+        positions_of_np_nan.append([])
+
+        for k in range(number_of_np_nan):
+            positions_of_np_nan[i].append((np.random.randint(0, input_batch_size - 1), np.random.randint(0, input_length)))
+            if positions_of_np_nan[i][-1][0] == 3:
+                positions_of_np_nan[i][-1] = (2, positions_of_np_nan[i][-1][1])
+
+        # input.append(np.random.randint(-10, 10, (input_batchsize, input_length)).astype(np.float))
+        input.append(1000 * (np.random.random((input_batch_size, input_length)) - 0.47))
+        for k in range(number_of_np_inftys):
+            input[i][positions_of_np_inftys[k]] = np_infty_sign * np.infty
+
+        for k in range(number_of_np_nan):
+            if k % 2 == 0:
+                input[i][positions_of_np_nan[i][k]] = np.nan
+            else:
+                input0[i][positions_of_np_nan[i][k]] = np.nan
+
+        input2.append(500 * (np.random.rand(input_batch_size)))
+
+        input[i][3] = input[0][3]
+
+        output = opt.send(Rivals(input0[i], input[i], input2[i]))
+
+        opt.__next__()
+
+    log.critical(time.clock()-t1)
+
+    weights = output[1]
+    unknown_energies = output[2]
+    slack = output[3]
+
+    d = []
+
+    assert slack.size == len(input) * input_batch_size or cg.append_all_constraints is False or cg.allow_duplicates is False, "Ich habe vergessen besagte Zeile zu entkommentieren"
+    if cg.append_all_constraints is False:
+        slack = np.zeros(len(input) * input_batch_size)
+
+    # wasts time for log.debug to catch up
+    for k in range(8):
+        i = pow(k, pow(k, k))
+
+    #
+
+    for i in range(number_of_inputs):
+        for k in range(number_of_np_nan):
+            if k % 2 == 0:
+                assert math.isnan(input[i][positions_of_np_nan[i][k]]) or input[i][positions_of_np_nan[i][k]] == unknown_energies[positions_of_np_nan[i][k][1]]
+                input[i][positions_of_np_nan[i][k]] = unknown_energies[positions_of_np_nan[i][k][1]]
+            else:
+                assert math.isnan(input0[i][positions_of_np_nan[i][k]]) or input0[i][positions_of_np_nan[i][k]] == unknown_energies[positions_of_np_nan[i][k][1]]
+                input0[i][positions_of_np_nan[i][k]] = unknown_energies[positions_of_np_nan[i][k][1]]
+
+    for k in range(number_of_inputs):
+        input[k][np.isinf(np.where(input[k] < 0, 0, input[k]))] = 1e30
+        input[k][np.isinf(np.where(input[k] > 0, 0, input[k]))] = - 1e30
+        input[k] = input[k]-input0[k]
+
+    for i in range(number_of_inputs):
+        for k in range(input_batch_size):
+            if cg.dynamic_margin:
+                d.append(input[i][k] @ weights + slack[input_batch_size * i + k] - np.log(input2[i][k] / 10 + 1))
+                """
+                assert input[i][k] @ weights + slack[input_batchsize * i + k] - np.log(input2[i][k]/10+1) >= 0, \
+                    "Following constraint was violated %d, %d by %s" % (i, k, input[i][k] @ weights + slack[input_batchsize * i + k] - np.log(input2[i][k]/10+1))
+                """
+            else:
+                d.append(input[i][k] @ weights + slack[input_batch_size * i + k] - cg.margin)
+                """
+                assert input[i][k] @ weights + slack[input_batchsize * i + k] - cg.margin >= 0, \
+                    "Following constraint was violated %d, %d by %s" % (i, k, input[i][k] @ weights + slack[input_batchsize * i + k] - cg.margin)
+                """
+    print("min/maxvalues sind")
+    print(min(d))
+    print(max(d))
+    d = np.asarray(d, dtype=np.float32)
+    k = sum(np.where(d < 0, 1, 0))
+    print("Amount of violated constraints is: " + str(k))
+    assert np.all(np.invert(np.isnan(d)))
+    if cg.append_all_constraints == False or cg.slack_factor < 100:
+        print("\tviolated constraints do not necessarily signal an error")
+
+    # asserts slack variables are not all 0
+    assert min(d) < 1e-5
+
+    print("slack:")
+    print(np.array2string(slack, precision=3, separator=',', suppress_small=True))
+
+    print("****************")
+    print("\"unittests\":")
+
+    # 2 / 2+ / 2
+    new_cg_small = ConstraintGeneration()
+    new_optimizer_small = new_cg_small.optimizer(np.zeros((1, 2))[0], np.ones(2))
+
+    new_cg_small.old_weights = np.ones(2) * 2
+    new_cg_small.old_unknown_energies = np.ones(2)
+
+    # FIXME: dtype=np.float64
+    m = 0.5
+    e = np.asarray((1, 2), dtype=np.float64)
+    u = np.asarray((3, 5), dtype=np.float64)
+    n_th_constr = 0
+    n_weights = len(u)
+    constr_f = new_cg_small.scipy_constraint(e, m, (False, False), (True, False), u, n_th_constr)
+
+    inputlist = []
+    inputlist.append(np.ones(6))
+    inputlist.append(np.asarray((2, 5, -5, 9, 48, 13), dtype=np.float64))
+    inputlist.append(np.asarray((1, 1, 1, 9, 9, 9, 1, 1), dtype=np.float64))
+    x = 1000 * (np.random.random(10) - 0.47)
+    x[8] = -237.7
+    inputlist.append(x)
+
+    for k in range(inputlist.__len__()):
+        # print(k)
+        lhs = constr_f(inputlist[k])
+        rhs = inputlist[k][:n_weights] @ (e[0] - u[0] + inputlist[k][-n_weights], e[1]) + inputlist[k][n_weights + n_th_constr] - m - new_cg_small.optimization_accuracy
+        np.testing.assert_almost_equal(lhs, rhs)
+
+        pointlist = []
+        pointlist.append(np.ones(inputlist[k].size))
+        pointlist.append(np.ones(inputlist[k].size) * 2.5)
+
+        for n in range(pointlist.__len__()):
+            der_constr_f1 = new_cg_small.scipy_constraint_derivative(e, m, (False, False), (True, False), u, n_th_constr)(pointlist[n])
+            der_constr_f2 = scipy.optimize.approx_fprime(pointlist[n], constr_f, 1e-7)
+
+            np.testing.assert_almost_equal(der_constr_f1, der_constr_f2, 8)
+
+    new_cg_small.slack_factor = 1.8
+    new_cg_small.u_e_factor = 0.67
+    new_cg_small.loss_multiplier = 13.5
+    new_cg_small.loss_function = cg.loss_function
+    new_cg_small.unknown_energy_func = 2
+    new_cg_small.scaling_weight_factor = 1
+
+    ou = np.asarray((3, 5.5), dtype=np.float64)
+    ow = np.asarray((1.5, 2), dtype=np.float64)
+    new_cg_small.old_weights = ow
+    new_cg_small.old_unknown_energies = ou
+
+    for k in range(k):
+        loss_f = new_cg_small.scipy_get_loss_func(2, inputlist[k].size - 4, 2)
+        w = inputlist[k][:n_weights]
+        u = inputlist[k][-n_weights:]
+        z2 = inputlist[k][n_weights:-n_weights].sum()
+        z4 = inputlist[k][n_weights:-n_weights].size
+
+        rhs = loss_f(inputlist[k])
+
+        if new_cg_small.loss_function == 0:
+            z1 = (w-ow) @ (w-ow)
+
+        elif new_cg_small.loss_function == 1:
+            z1 = w.sum()
+        else:
+            assert new_cg_small.loss_function == 2
+            z1 = w @ w
+
+        z3 = (u - ou) @ (u - ou)
+
+        lhs = (z1 + new_cg_small.slack_factor * z2 / z4 + new_cg_small.u_e_factor * z3) * new_cg_small.loss_multiplier
+
+        np.testing.assert_almost_equal(lhs, rhs)
+
+        pointlist = []
+        pointlist.append(np.ones(inputlist[k].size))
+        pointlist.append(np.ones(inputlist[k].size) * 2.5)
+
+        for n in range(pointlist.__len__()):
+            der_loss_f1 = new_cg_small.scipy_get_loss_func_derivative(2, inputlist[k].size - 4, 2)(pointlist[n])
+            der_loss_f2 = scipy.optimize.approx_fprime(pointlist[n], loss_f, 1e-7)
+
+            np.testing.assert_almost_equal(der_loss_f1, der_loss_f2, 5)
+
+            # explicitly tests the derivative of the slack part as this is very easy and the error relatively big
+            assert np.all(np.where(
+                new_cg_small.scipy_get_loss_func_derivative(n_weights, 2, n_weights)(pointlist[n])[2:4] == new_cg_small.loss_multiplier * new_cg_small.slack_factor / 2,
+                True, False))
+
+    # ____________________________________________
+    # FIXME: Constraint test gegeneinander gehört hierhin, nicht in den code
+
+    # 44/ 8+ /44
+    new_cg_big = ConstraintGeneration()
+    new_optimizer_big = new_cg_big.optimizer(np.zeros((1, 2))[0], np.ones(2))
+
+    m = 0.5
+    e = 1000 * (np.random.random(44) - 0.5)
+    u = 100 * (np.random.random(44) - 0.5)
+    new_cg_big.old_weights = ow
+    new_cg_big.old_unknown_energies = ou
+    n_th_constr = 7
+    n_weights = len(u)
+    nan_log_corr = np.random.choice(a=[False, True], size=44)
+    nan_log_incorr = np.random.choice(a=[False, True], size=44)
+
+    constr_f = new_cg_big.scipy_constraint(e, m, nan_log_corr, nan_log_incorr, u, n_th_constr)
+
+    inputlist = []
+    inputlist.append(1000 * (np.random.random(104) - 0.47))
+    inputlist.append(100000 * (np.random.random(100) - 0.5))
+    inputlist.append(1000 * (np.random.random(144) - 0.47))
+    inputlist.append(5000 * (np.random.random(104)))
+    inputlist.append(6000 * (np.random.random(104) + 0.47))
+
+    for k in range(inputlist.__len__()):
+        # print(k)
+        new_e = np.copy(e)
+        for n in range(n_weights):
+            if nan_log_corr[n]:
+                new_e[n] = new_e[n] + u[n] - inputlist[k][-n_weights + n]
+            if nan_log_incorr[n]:
+                new_e[n] = new_e[n] - u[n] + inputlist[k][-n_weights + n]
+
+        lhs = constr_f(inputlist[k])
+        rhs = inputlist[k][:n_weights] @ new_e + inputlist[k][n_weights + n_th_constr] - m - new_cg_big.optimization_accuracy
+
+        np.testing.assert_almost_equal(lhs, rhs)
+
+        pointlist = []
+
+        for j in range(30):
+            pointlist.append(100 * (np.random.random(inputlist[k].size) - 0.5))
+
+            der_constr_f1 = new_cg_big.scipy_constraint_derivative(e, m, nan_log_corr, nan_log_incorr, u, n_th_constr)(pointlist[j])
+            der_constr_f2 = scipy.optimize.approx_fprime(pointlist[j], constr_f, 1e-7)
+
+            np.testing.assert_almost_equal(der_constr_f1, der_constr_f2, 3)
+
+    new_cg_big.slack_factor = 1.8
+    new_cg_big.u_e_factor = 0.67
+    new_cg_big.loss_multiplier = 13.5
+    new_cg_big.loss_function = cg.loss_function
+    new_cg_big.unknown_energy_func = 2
+    new_cg_big.scaling_weight_factor = 1
+
+    for k in range(k):
+        # print(k)
+        loss_f = new_cg_big.scipy_get_loss_func(n_weights, inputlist[k].size - 2 * n_weights, n_weights)
+
+        inputlist[k][:n_weights] = inputlist[k][:n_weights] / 100
+        inputlist[k][-n_weights:] = inputlist[k][-n_weights:] / 100
+        w = inputlist[k][:n_weights]
+        u = inputlist[k][-n_weights:]
+        ou = u - 10 * (np.random.random(44) - 0.5)
+        ow = w - 100 * (np.random.random(44) - 0.5)
+        new_cg_big.old_weights = ow
+        new_cg_big.old_unknown_energies = ou
+
+        rhs = loss_f(inputlist[k])
+
+        z2 = inputlist[k][n_weights:-n_weights].sum()
+        z4 = inputlist[k][n_weights:-n_weights].size
+
+        if new_cg_big.loss_function == 0:
+            z1 = (w-ow) @ (w-ow)
+
+        elif new_cg_big.loss_function == 1:
+            z1 = w.sum()
+        else:
+            assert new_cg_big.loss_function == 2
+            z1 = w @ w
+
+        if new_cg_big.unknown_energy_func == 0:
+            z3 = u @ u
+
+        elif new_cg_big.unknown_energy_func == 1:
+            z3 = u.sum()
+        else:
+            assert new_cg_big.unknown_energy_func == 2
+            z3 = (u - ou) @ (u - ou)
+
+        lhs = (z1 + new_cg_big.slack_factor * z2 / z4 + new_cg_big.u_e_factor * z3) * new_cg_big.loss_multiplier
+        np.testing.assert_almost_equal(lhs, rhs)
+
+        pointlist = []
+
+        for n in range(30):
+            # print(str(k) + " and " + str(j))
+            pointlist.append(100 * (np.random.random(inputlist[k].size) - 0.5))
+
+            n_slack = inputlist[k].size - 2 * n_weights
+
+            der_loss_f1 = new_cg_big.scipy_get_loss_func_derivative(n_weights, n_slack, n_weights)(pointlist[n])
+            der_loss_f2 = scipy.optimize.approx_fprime(pointlist[n], loss_f, 1e-4)
+
+            np.testing.assert_almost_equal(der_loss_f1, der_loss_f2, 2)
+            # FIXME: Note: doesn't work
+            # np.testing.assert_allclose(der_loss_f1, der_loss_f2, rtol=1, atol=1e-2)
+
+            # Note biggest difference always with slack variables
+            # print("argmax: %.2f" % (np.argmax(der_loss_f1 - der_loss_f2)))
+
+            # explicitly tests the derivative of the slack part as this is very easy and the error relatively big
+            slack_der = new_cg_big.scipy_get_loss_func_derivative(n_weights, n_slack, n_weights)(pointlist[n])[n_weights:n_weights + n_slack]
+            correct_slack = new_cg_big.loss_multiplier * new_cg_big.slack_factor / n_slack
+            np.testing.assert_almost_equal(slack_der, np.ones(n_slack) * correct_slack, 16)
+
+
+    """
+    elif case == 2:
+        from gekko import GEKKO
+
+        m = GEKKO()  # Initialize gekko
+        # Initialize variables
+        x = np.empty(4)
+        x = [m.Var(lb=1, ub=5) for i in range(4)]
+        x1 = x[0]
+        x2 = x[1]
+        x3 = x[2]
+        x4 = x[3]
+        x = np.append(x, np.empty(1))
+        x[4] = m.Var(lb=0, ub=1)
+        # Equations
+        m.Equation(x1 * x2 * x3 * x4 * x4 >= 25)
+        eq = m.Param(value=40)
+        m.Equation(x1 ** 2 + x2 ** 2 + x3 ** 2 + x4 ** 2 == eq)
+        m.Obj(x1 * x4 * (x1 + x2 + x3) + x3 + x[4])  # Objective
+        m.options.IMODE = 3  # Steady state optimization
+        m.options.SOLVER = 3
+        m.solve()  # Solve
+        print('Results')
+        print('x1: ' + str(x1.value))
+        print('x2: ' + str(x2.value))
+        print('x3: ' + str(x3.value))
+        print('x4: ' + str(x4.value))
+    """
+    # output = opt.send(Rivals(np.array([[-10, 3]], dtype=np.float), np.array([[0, 0]], dtype=np.float), np.array([1])))
+    # opt.__next__()
+
+    # constraints = np.empty((100, n_weights + 1), dtype=np.float64)
+    #
+    # # weights >= 0
+    # constraints[:n_weights, :n_weights] = np.diag(np.ones(n_weights))
+    # constraints[:n_weights, n_weights] = 0
+    # n_constraints = n_weights
+    #
+    # unknown_energies = initial_unknown_energies
+    #
+    # while True:
+    #     # get the batch from the outside
+    #     R = yield
+    #     corr_energies, incorr_energies, error_reduction = R.out()
+    #     energies = corr_energies - incorr_energies
+    #
+    #     constraints[n_constraints, :n_weights] = energies
+    #     constraints[n_constraints, n_weights] = 1
+    #     n_constraints += 1
+    #
+    #     # Der Solver löst Gx >= h.
+    #     qp_output = solve_qp(np.diag(np.ones(n_weights)), np.zeros(n_weights), constraints[:n_constraints, :n_weights].T, constraints[:n_constraints, n_weights])
+    #
+    #     weights = qp_output[0]
+    #     loss = qp_output[1]*2
+    #
+    #     yield loss, weights, unknown_energies
+
+    """ bounds = scipy.optimize.Bounds(np.append(a, np.zeros(energies.shape[0])), np.append(b, self.slack_variable_upper_bound * np.ones(energies.shape[0])))
+
+                constraints = []
+
+                for k in range(energies.shape[0]):
+                    # add constraints, but only if "append_all_constraints" is true or they are not fullfilled with margin constraint_append_barrier
+
+                    # FIXME: It should be possible to speed this up, but doesn't seem neccessary
+
+                    # higher barrier -> more constraints
+                    if self.append_all_constraints or weights[:n_weights] @ energies[k, :] - self.margin - self.optimization_accuracy < self.constraint_not_append_barrier:
+                        constraints.append({'type': 'ineq', 'fun': self.g(energies, n_weights, k)})
+
+                if not self.alternate_loss_function:
+                    # the first n_weights entries of x are the weights that we want to calculate. After that we have the slack variables for the different equations. One for each equation
+                    l = len(constraints)
+                    f = lambda x: (x[:n_weights] @ x[:n_weights] + self.slack_factor * x[n_weights:].sum()) / l
+
+                    def jac_f(x):
+                        der = np.zeros_like(x)
+                        der[:n_weights] = 2 * x[:n_weights] / l
+                        der[n_weights:] = self.slack_factor / l
+                        return der
+
+                else:
+                    # doesn't work
+                    f = lambda x: np.where(x[n_weights:] > 0, 1, 0).sum() + np.tanh(x[:n_weights] @ x[:n_weights] + self.slack_factor * x[n_weights:].sum())
+
+                result = minimize(f, method='SLSQP', jac=jac_f, x0=np.append(weights, np.zeros(energies.shape[0])), bounds=bounds, constraints=constraints,
+                                  options={'maxiter': 10000, 'ftol': self.optimization_accuracy}, tol=self.optimization_accuracy)
+
+                if not result.success:
+                    n_minimize_errors += 1
+                    log.critical('Apparently something failed! %s', result)
+                    # optimization mostly fails when f return too big values, so we divide f by a bigger factor
+                    # divide f by 10 ?!
+
+                relative_weight_update = LA.norm(weights - result.x[:n_weights]) / LA.norm(weights)
+
+                weights = result.x[:n_weights]
+                slack = result.x[n_weights:]
+                loss = result.fun
+
+                if np.amax(np.absolute(weights - result.x[:n_weights])) < 1e-5:
+                    n_no_w_updates += 1"""
