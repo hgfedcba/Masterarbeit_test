@@ -162,6 +162,7 @@ class Config:
 
             # start_time = time.time()
             h1 = binomial_trees_BS(self.xi, r, mu(1), sigma(1), self.T, self.N * 10, K)
+            assert mu(1) == r - sigma(1) ** 2 / 2
             self.other_computation = binomial_trees(self.xi, r, sigma(1), self.T, self.N * 10, K)
             h = self.other_computation
             h1 = mu(1)
