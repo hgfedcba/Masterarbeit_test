@@ -26,7 +26,7 @@ class MainRoutine:
         self.N = config.N
 
     def MainSchleife(self):
-        M = 3  # Number of optimization steps
+        M = 30  # Number of optimization steps
         J = 16  # Batchsize
         L = 32  # valsize
 
@@ -148,7 +148,7 @@ if __name__ == '__main__':
     # NN = NN.NN(c1)
     # NN.test2()
 
-    lokaleMainRoutine = MainRoutine(c1)
-    lokaleMainRoutine.MainSchleife()
+    # lokaleMainRoutine = MainRoutine(c1)
+    # lokaleMainRoutine.MainSchleife()
 
     log.info("time for everything is %s seconds" % (time.time() - start_time))
