@@ -26,15 +26,17 @@ class MainRoutine:
         self.N = config.N
 
     def MainSchleife(self):
-        M = 30  # Number of optimization steps
+        M = 3  # Number of optimization steps
         J = 16  # Batchsize
         L = 32  # valsize
-
+        # TODO: Antithetic variables. Only invert brownian motion. Only works if f and -f are negativly correlated, f.e. f monoton.
         # self.NN.test()
 
-        path_list, individual_payoffs, average_payoff, val_value_list = self.NN.optimization(M, J, L)
+        path_list, individual_payoffs, average_payoff, val_value_list, train_duration, val_duration, net_net_duration = self.NN.optimization(M, J, L)
         for k in range(len(val_value_list)):
-            log.info("Value of Option is approximately %s after %s steps" % (val_value_list[k].item(), k))
+            self.mylog("The \t", k, "-th iteration took\t", train_duration[k] + val_duration[k], " seconds. The estimated price of the option at this point is \t",
+                       val_value_list[k].item())
+        self.mylog("Overall training took ", sum(train_duration), " seconds and validation took ", sum(val_duration), " seconds, ", sum(net_net_duration), " of which was spend on the net itself.")
 
         # TODO: Here i should make a new monte carlo approximation of the payoff after the net stopped optimizing.
         # TODO: Nevermind. testset vs trainset, i should structre it differently alltogether. train vs test vs validation
@@ -42,15 +44,25 @@ class MainRoutine:
         if self.config.other_computation_exists:
             log.info("other computation yields: %s", self.config.other_computation)
         """
-        for l in range(path_list.__len__() - 1):
-            h = path_list[l + 1]
-            self.draw(path_list[l + 1])
+        for l in range(path_list.__len__()):
+            h = path_list[l]
+            self.draw(path_list[l])
         """
+
 
     def myprint(self, *argv):
         out = ''.join(str(s) for s in argv)
         out += "\n"
         print(out)
+
+    def mylog(self, *argv):
+        argv = list(argv)
+        for s in range(len(argv)):
+            if isinstance(argv[s], float):
+                argv[s] = round(argv[s], 3)
+        out = ''.join(str(s) for s in argv)
+        out += "\n"
+        log.info(out)
 
     def draw(self, x):
         # Diese Funktion stoppt den Programmfluss bis ich die Graphik geschlossen habe
@@ -137,8 +149,8 @@ if __name__ == '__main__':
     start_time = time.time()
     config_time = time.time()
 
-    c1 = Config.Config("1")
-    log.info("time for config is %s seconds" % (time.time() - config_time))
+    c1 = Config.Config("2")
+    log.info("time for config is %s seconds" % round((time.time() - config_time), 3))
     """
     log.debug("hi")
     log.critical("iovbu")
@@ -148,7 +160,7 @@ if __name__ == '__main__':
     # NN = NN.NN(c1)
     # NN.test2()
 
-    # lokaleMainRoutine = MainRoutine(c1)
+    lokaleMainRoutine = MainRoutine(c1)
     # lokaleMainRoutine.MainSchleife()
 
-    log.info("time for everything is %s seconds" % (time.time() - start_time))
+    log.info("time for everything is %s seconds" % round((time.time() - start_time), 3))

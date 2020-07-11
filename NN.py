@@ -36,40 +36,13 @@ class NN:
         self.Model = Model
         self.gamma = config.gamma
         self.t = self.generate_partition(self.Model.getT())  # 0=t_0<...<t_N=T
+        self.net_net_duration = []
 
 
     def define_nets(self):
         self.u = []
         for n in range(self.N):
             self.u.append(Net(self.d))
-
-    """
-        optimizer = optim.SGD(net.parameters(), lr=0.001, momentum=0.9)
-
-        inputs = torch.randn(2, 100)
-
-        for epoch in range(100):  # loop over the dataset multiple times
-
-            running_loss = 0.0
-            for i in range(1):
-                # get the inputs; data is a list of [inputs, labels]
-                input = inputs
-
-                # zero the parameter gradients
-                optimizer.zero_grad()
-
-                # forward + backward + optimize
-                outputs = net(input)
-                loss = torch.norm(outputs - torch.ones(100))
-                loss.backward()
-                optimizer.step()
-
-                # print statistics
-                running_loss += loss.item()
-
-                print(running_loss)
-                running_loss = 0.0
-    """
 
     def optimization(self, M, J, L):
         np.random.seed(1337)
@@ -89,14 +62,17 @@ class NN:
         val_path_list = []
         val_value_list = []
         val_individual_payoffs = []
+        val_duration = []
 
         for l in range(L):
             val_bm_list.append(self.generate_bm())
             val_path_list.append(self.generate_path(val_bm_list[l]))
 
         path_list = []
+        train_duration = []
 
         for m in range(M):
+            self.net_net_duration.append(0)
             m_th_iteration_time = time.time()
             bm_list = []
             path_list = []
@@ -105,9 +81,9 @@ class NN:
 
             # zero the parameter gradients
             optimizer.zero_grad()
-            torch.autograd.set_detect_anomaly(True)
+            # torch.autograd.set_detect_anomaly(True)
 
-            training_time = time.time()
+            train_duration.append(time.time())
             for j in range(J):
                 bm_list.append(self.generate_bm())
                 path_list.append(self.generate_path(bm_list[j]))
@@ -124,22 +100,44 @@ class NN:
             loss.backward()
             # loss = torch.norm(U)
             # loss.backward()
+            t = time.time()
             optimizer.step()
-            log.info("time for training is %s seconds" % (time.time() - training_time))
+            self.net_net_duration[-1] += time.time() - t
+            train_duration[m] = time.time() - train_duration[m]
 
             # validation
             val_individual_payoffs.append([])
             U = torch.empty(L, self.N + 1)
-            val_time = time.time()
+            val_duration.append(time.time())
+
+            if m == 25:
+                assert True
+
+            tau_list = []
             for l in range(L):
                 h = self.generate_stopping_time_factors_from_path(val_path_list[l])
                 U[l, :] = h[:, 0]
                 val_individual_payoffs[m].append(self.calculate_payoffs(U[l, :], val_path_list[l], self.Model.getg, self.t))
+
+                # part 2
+                tau_set = np.zeros(self.N + 1)
+                for n in range(tau_set.size):
+                    h1 = torch.sum(U[l, 0:n + 1]).item()
+                    h2 = 1 - U[l, n].item()
+                    h3 = sum(U[l, 0:n]) >= 1 - U[l, n]
+                    tau_set[n] = torch.sum(U[l, 0:n + 1]).item() >= 1 - U[l, n].item()
+                tau_list.append(np.argmax(tau_set))  # argmax returns the first "True" entry
+            another_list = []
+            for l2 in range(L):
+                actual_stopping_time = np.zeros(self.N + 1)
+                actual_stopping_time[tau_list[l2]] = 1
+                another_list.append(self.calculate_payoffs(actual_stopping_time, val_path_list[l2], self.Model.getg, self.t).item())
+            log.info("The probably better output for the value below is %s" % round(sum(another_list) / L, 3))
+
             val_value_list.append(torch.sum(torch.stack(val_individual_payoffs[m])) / len(val_individual_payoffs[m]))
-            # update weights
-            log.info("time for validation is %s seconds" % (time.time() - val_time))
-            log.info("time for %s-th iteration is %s seconds" % (m, time.time() - m_th_iteration_time))
-        return path_list, individual_payoffs, average_payoff, val_value_list
+            val_duration[m] = time.time() - val_duration[m]
+            log.info("Value after %s iterations is %s" % (m, round(val_value_list[m].item(), 3)))
+        return path_list, individual_payoffs, average_payoff, val_value_list, train_duration, val_duration, self.net_net_duration
 
 
     def generate_partition(self, T):
@@ -188,7 +186,9 @@ class NN:
                 sum.append(0)
             x.append(torch.tensor(x_input[:, n], dtype=torch.float32, requires_grad=True))
             if n < self.N:
+                t = time.time()
                 h.append(self.u[n](x[n]))
+                self.net_net_duration[-1] += time.time() - t
             else:
                 h.append(1)
             # max = torch.max(torch.tensor([h1, h2]))

@@ -27,7 +27,7 @@ class MathematicalModel:
         self.assert_x_in_Rd(x, self.getd())
 
         out = self.__internal_mu(x)
-
+        
         self.assert_x_in_Rd(out, self.getd())
 
         return out
