@@ -1,3 +1,6 @@
+import pathlib
+from pathlib import Path
+
 import numpy as np
 from pylab import plot, show, grid, xlabel, ylabel
 from scipy import stats
@@ -5,37 +8,49 @@ import scipy
 import MathematicalModel
 import NN
 import Config
+import Out
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import time
-import logging as log
+import logging
 import coloredlogs
+import matplotlib.pyplot as plt
+import matplotlib.backends.backend_pdf as pdfp
 
 
 class MainRoutine:
-    def __init__(self, config):
-        print("Main Routine init wird aufgerufen")
+    def __init__(self, config, log, out):
         np.random.seed(seed=config.random_seed)
 
         self.Model = MathematicalModel.MathematicalModel(config.T, config.d, config.mu, config.sigma, config.g, config.xi)
-        self.NN = NN.NN(c1, self.Model)
+        self.NN = NN.NN(c1, self.Model, log)
         self.config = config
 
         self.N = config.N
 
-    def MainSchleife(self):
-        M = 3  # Number of optimization steps
-        J = 16  # Batchsize
-        L = 32  # valsize
-        # TODO: Antithetic variables. Only invert brownian motion. Only works if f and -f are negativly correlated, f.e. f monoton.
-        # self.NN.test()
+        self.log = log
+        self.out = out
 
-        path_list, individual_payoffs, average_payoff, val_value_list, train_duration, val_duration, net_net_duration = self.NN.optimization(M, J, L)
+        # self.NN.test5()
+
+    def MainSchleife(self):
+        log = self.log
+        # TODO: Output to pdf
+        # TODO: In 1-d: draw u as a function of x
+        M = 50  # Number of optimization steps
+        J = 16  # Batchsize
+        L = 16  # valsize
+        # TODO: Antithetic variables. Only invert brownian motion. Only works if f and -f are negativly correlated, f.e. f monoton.
+
+        individual_payoffs, average_payoff, val_value_list, train_duration, val_duration, net_net_duration = self.NN.optimization(M, J, L)
+        log.info("\n")
+        """
         for k in range(len(val_value_list)):
             self.mylog("The \t", k, "-th iteration took\t", train_duration[k] + val_duration[k], " seconds. The estimated price of the option at this point is \t",
                        val_value_list[k].item())
+        """
         self.mylog("Overall training took ", sum(train_duration), " seconds and validation took ", sum(val_duration), " seconds, ", sum(net_net_duration), " of which was spend on the net itself.")
 
         # TODO: Here i should make a new monte carlo approximation of the payoff after the net stopped optimizing.
@@ -48,6 +63,15 @@ class MainRoutine:
             h = path_list[l]
             self.draw(path_list[l])
         """
+        # NN, Model, config, average_payoff, val_value_list, train_duration, val_duration, net_net_duration):
+        self.out.NN = self.NN
+        self.out.config = self.config
+        self.out.Model = self.Model
+        self.out.average_payoff = average_payoff
+        self.out.val_value_list = val_value_list
+        self.out.train_duration = train_duration
+        self.out.val_duration = val_duration
+        self.out.net_net_duration = net_net_duration
 
 
     def myprint(self, *argv):
@@ -62,7 +86,7 @@ class MainRoutine:
                 argv[s] = round(argv[s], 3)
         out = ''.join(str(s) for s in argv)
         out += "\n"
-        log.info(out)
+        self.log.info(out)
 
     def draw(self, x):
         # Diese Funktion stoppt den Programmfluss bis ich die Graphik geschlossen habe
@@ -143,13 +167,28 @@ class Tutorial:
 if __name__ == '__main__':
     # filename='example.log'
     # stream=sys.stderr,
-    # log.basicConfig(level=log.DEBUG, format='%(asctime)s %(message)s')
-    coloredlogs.install(level='DEBUG', fmt='%(asctime)s %(message)s')
+    # TODO: Verify this has an effect
+    # device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    folder_name = "Testrun1"
+    working_directory = pathlib.Path().absolute()
+    output_location = working_directory / f'{folder_name}'
+
+    out = Out.Output(output_location)
+
+    log = logging.getLogger('l')
+    logging.basicConfig(format='%(asctime)s:  %(message)s')
+    log.setLevel(logging.DEBUG)
+    # coloredlogs.install(level='DEBUG', fmt='%(asctime)s %(message)s', logger=log)
+
+    fh = logging.FileHandler('log.log')
+    formatter = logging.Formatter('%(asctime)s %(message)s')
+    fh.setFormatter(formatter)
+    log.addHandler(fh)
 
     start_time = time.time()
     config_time = time.time()
 
-    c1 = Config.Config("2")
+    c1 = Config.Config("2", log)
     log.info("time for config is %s seconds" % round((time.time() - config_time), 3))
     """
     log.debug("hi")
@@ -160,7 +199,111 @@ if __name__ == '__main__':
     # NN = NN.NN(c1)
     # NN.test2()
 
-    lokaleMainRoutine = MainRoutine(c1)
-    # lokaleMainRoutine.MainSchleife()
+    lokaleMainRoutine = MainRoutine(c1, log, out)
+    lokaleMainRoutine.MainSchleife()
+
+    out.create_pdf()
 
     log.info("time for everything is %s seconds" % round((time.time() - start_time), 3))
+
+    # I will try to verify the universal approximation theorem on an arbitrary function
+    """
+    import torch
+    from torch import nn
+    from torch.autograd import Variable
+    import numpy as np
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    from sklearn.model_selection import train_test_split
+    from sklearn.metrics import accuracy_score
+    import torch.optim as optim
+
+
+    def f_x(x):
+        return x * x / 64 - 5 * x / 4 + 25
+
+
+    # Building dataset
+    def build_dataset():
+        # Given f(x), is_f_x defines whether the function is satisfied
+        x_values = np.ones((21, 1))
+        for i in range(0, 21):
+            x_values[i] = i + 30  # True
+        return x_values
+
+
+    x_values = build_dataset()
+
+    # Building nn
+    # activation_function = nn.SELU() #2.3 and better
+    activation_function = nn.SELU()
+    # net = nn.Sequential(nn.Linear(1, 100), nn.ReLU(), nn.Linear(100, 100), nn.ReLU(), nn.Linear(100, 1))
+    net = nn.Sequential(nn.Linear(1, 1000), activation_function, nn.Linear(1000, 1000), activation_function, nn.Linear(1000, 1000), activation_function, nn.Linear(1000, 1))
+
+    # parameters
+    optimizer = optim.Adam(net.parameters(), lr=0.00001)
+    # optimizer = optim.Rprop(net.parameters(), lr=0.00001)
+    epochs = 600
+
+
+    def out(k):
+        # folder_name = "Testrun1"
+        # working_directory = pathlib.Path().absolute()
+        # output_location = working_directory / f'{folder_name}'
+
+        a = 30
+        b = 50
+
+        # TODO: copy graph so i only use a copy when it was still open
+
+        import matplotlib.backends.backend_pdf as pdfp
+        from pylab import plot, show, grid, xlabel, ylabel
+        import matplotlib.pyplot as plt
+        # pdf = pdfp.PdfPages("graph" + str(k) + ".pdf")
+
+        t = np.linspace(a, b, 20)
+        x = np.zeros(t.shape[0])
+        c_fig = plt.figure()
+
+        for j in range(len(t)):
+            h = torch.tensor(np.ones(1) * t[j], dtype=torch.float32)
+            x[j] = net(h)
+        plt.ylim([0, 1])
+        plot(t, x, linewidth=4)
+        xlabel('x', fontsize=16)
+        ylabel('net(x)', fontsize=16)
+        grid(True)
+        show()
+        # pdf.savefig(c_fig)
+
+        # pdf.close()
+        plt.close(c_fig)
+
+
+    def train():
+        net.train()
+        losses = []
+        for epoch in range(1, epochs):
+            x_train = Variable(torch.from_numpy(x_values)).float()
+            y_train = f_x(x_train)
+            y_pred = net(x_train)
+            loss = torch.sum(torch.abs(y_pred - y_train))
+            print("epoch #", epoch)
+            print(loss.item())
+            losses.append(loss.item())
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+        return losses
+
+
+    print("training start....")
+    losses = train()
+    plt.plot(range(1, epochs), losses)
+    plt.xlabel("epoch")
+    plt.ylabel("loss train")
+    plt.ylim([0, 100])
+    plt.show()
+
+    out(epochs)
+    """

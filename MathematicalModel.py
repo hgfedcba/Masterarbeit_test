@@ -6,7 +6,6 @@ import random
 # noinspection SpellCheckingInspection
 class MathematicalModel:
     def __init__(self, T, d, mu, sigma, g, xi):
-        print("Model init wird aufgerufen")
         self.__T = T  # Time Horizon
         self.__d = d  # Dimension of the underlying Problem
         self.__internal_mu = mu  # drift coefficient
@@ -27,7 +26,7 @@ class MathematicalModel:
         self.assert_x_in_Rd(x, self.getd())
 
         out = self.__internal_mu(x)
-        
+
         self.assert_x_in_Rd(out, self.getd())
 
         return out
