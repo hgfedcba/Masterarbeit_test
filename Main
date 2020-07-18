@@ -199,15 +199,15 @@ if __name__ == '__main__':
     # NN = NN.NN(c1)
     # NN.test2()
 
-    lokaleMainRoutine = MainRoutine(c1, log, out)
-    lokaleMainRoutine.MainSchleife()
+    # lokaleMainRoutine = MainRoutine(c1, log, out)
+    # lokaleMainRoutine.MainSchleife()
 
-    out.create_pdf()
+    # out.create_pdf()
 
     log.info("time for everything is %s seconds" % round((time.time() - start_time), 3))
 
     # I will try to verify the universal approximation theorem on an arbitrary function
-    """
+
     import torch
     from torch import nn
     from torch.autograd import Variable
@@ -238,12 +238,14 @@ if __name__ == '__main__':
     # activation_function = nn.SELU() #2.3 and better
     activation_function = nn.SELU()
     # net = nn.Sequential(nn.Linear(1, 100), nn.ReLU(), nn.Linear(100, 100), nn.ReLU(), nn.Linear(100, 1))
-    net = nn.Sequential(nn.Linear(1, 1000), activation_function, nn.Linear(1000, 1000), activation_function, nn.Linear(1000, 1000), activation_function, nn.Linear(1000, 1))
-
+    # net = nn.Sequential(nn.Linear(1, 1000), activation_function, nn.Linear(1000, 1000), activation_function, nn.Linear(1000, 1000), activation_function, nn.Linear(1000, 1))
+    net = nn.Sequential(nn.Linear(1, 50), nn.Tanh(), nn.Linear(50, 50), nn.Tanh(), nn.Linear(50, 1))
     # parameters
-    optimizer = optim.Adam(net.parameters(), lr=0.00001)
+    # optimizer = optim.Adam(net.parameters(), lr=0.00001)
     # optimizer = optim.Rprop(net.parameters(), lr=0.00001)
-    epochs = 600
+    optimizer = optim.Adam(net.parameters(), lr=0.01)
+    scheduler = optim.lr_scheduler.ExponentialLR(optimizer, 0.99)
+    epochs = 1000
 
 
     def out(k):
@@ -287,7 +289,8 @@ if __name__ == '__main__':
             x_train = Variable(torch.from_numpy(x_values)).float()
             y_train = f_x(x_train)
             y_pred = net(x_train)
-            loss = torch.sum(torch.abs(y_pred - y_train))
+            # loss = torch.sum(torch.abs(y_pred - y_train))
+            loss = ((y_pred - y_train) ** 2).sum()
             print("epoch #", epoch)
             print(loss.item())
             losses.append(loss.item())
@@ -306,4 +309,3 @@ if __name__ == '__main__':
     plt.show()
 
     out(epochs)
-    """
