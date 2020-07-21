@@ -28,7 +28,7 @@ class Config:
                     assert True
 
             V = np.ones((N + 1, N + 1))
-
+            V_map = np.ones((N + 1, N + 1)) * -2
             for i in range(N, -1, -1):
                 for j in range(i, -1, -1):
                     if i == N:
@@ -37,6 +37,7 @@ class Config:
                         h1 = max(K - S[j][i], 0)
                         h2 = alpha ** -1 * (q * V[j + 1][i + 1] + (1 - q) * V[j][i + 1])
                         V[j][i] = max(h1, h2)
+                        V_map[j][i] = h1 > h2  # a 1 indicates exercising is good
             return V[0][0]  # tested
 
         def binomial_trees_BS(S0, r_const, mu, sigma, T, k, K):
@@ -75,7 +76,7 @@ class Config:
             self.T = 10
             self.N = 5
             self.xi = 30
-            self.gamma = 0.01
+            self.lr = 0.01
             self.random_seed = 23343
 
             self.d = 1  # dimension
@@ -144,23 +145,28 @@ class Config:
 
         elif string == "2":
             # 1 american puts
+            self.max_number_iterations = 50
+            self.batch_size = 16
+            self.val_size = 16
             self.T = 10
             self.N = 10
             self.xi = 40
-            self.gamma = 10  # lernrate
+            self.lr = 0.0001  # lernrate
+            self.lr_sheduler_breakpoints = [50, 100, 1000]
             self.random_seed = 23343
 
             self.d = 1  # dimension
-            r = 0.1  # interest rate
+            r = 0.05  # interest rate
             K = 40  # strike price
             delta = 0  # dividend rate
 
+            constant_sigma = 0.25
+
             def sigma(x):
-                internal_sigma = 0.5
                 if isinstance(x, int) or isinstance(x, float):
-                    out = internal_sigma
+                    out = constant_sigma
                 else:
-                    out = internal_sigma * np.identity(x.shape[0])
+                    out = constant_sigma * np.identity(x.shape[0])
                 return out
 
             self.sigma = sigma
@@ -171,17 +177,19 @@ class Config:
                 return out
             """
 
+            # constant_mu = 0.2
+            constant_mu = r - constant_sigma ** 2 / 2
+
             def mu(x):
-                internal_mu = 0.2
                 if isinstance(x, int) or isinstance(x, float):
-                    out = internal_mu
+                    out = constant_mu
                 else:
                     # TODO: Higher dimension is NOT supported here
-                    out = internal_mu * np.ones(x.shape[0])
+                    out = constant_mu * np.ones(x.shape[0])
                 return out
 
             self.mu = mu
-
+            """
             def g(t_in, x):
                 t = torch.ones(1) * t_in
                 sum = torch.zeros(1)
@@ -191,12 +199,24 @@ class Config:
                     # sum += c - x[j]
                 # return torch.exp(-r * t) * sum
                 return sum
+            """
+
+            def g(t_in, x):
+                sum = 0
+                for j in range(self.d):
+                    sum += max(K - x[j].item(), 0)
+                    # sum += c - x[j]
+                # return torch.exp(-r * t) * sum
+                return sum
 
             self.g = g
 
             self.other_computation_exists = True
-
-            self.other_computation = binomial_trees_BS(self.xi, r, mu(1), sigma(1), self.T, self.N / self.T, K)
+            if mu(1) == r - sigma(1) ** 2 / 2:
+                self.other_computation = binomial_trees(self.xi, r, sigma(1), self.T, self.N, K)
+            else:
+                self.other_computation = binomial_trees_BS(self.xi, r, mu(1), sigma(1), self.T, self.N / self.T, K)
             print("other computation yield: " + str(self.other_computation))
 
             assert sigma(1) > 0
+            assert r >= 0

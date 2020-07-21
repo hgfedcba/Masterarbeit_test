@@ -49,7 +49,7 @@ class Output:
         pdf = pdfp.PdfPages("graph.pdf")
 
         t = np.linspace(a, b, 20)
-        l = len(self.NN.u) - 1
+        l = len(self.NN.u)
         x = np.zeros((l, t.shape[0]))
         for k in range(l):
             c_fig = plt.figure(k)

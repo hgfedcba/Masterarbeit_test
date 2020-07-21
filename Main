@@ -18,6 +18,7 @@ import logging
 import coloredlogs
 import matplotlib.pyplot as plt
 import matplotlib.backends.backend_pdf as pdfp
+import Tests
 
 
 class MainRoutine:
@@ -33,15 +34,13 @@ class MainRoutine:
         self.log = log
         self.out = out
 
-        # self.NN.test5()
-
     def MainSchleife(self):
         log = self.log
         # TODO: Output to pdf
         # TODO: In 1-d: draw u as a function of x
-        M = 50  # Number of optimization steps
-        J = 16  # Batchsize
-        L = 16  # valsize
+        M = self.config.max_number_iterations  # Number of optimization steps
+        J = self.config.batch_size  # Batchsize
+        L = self.config.val_size  # valsize
         # TODO: Antithetic variables. Only invert brownian motion. Only works if f and -f are negativly correlated, f.e. f monoton.
 
         individual_payoffs, average_payoff, val_value_list, train_duration, val_duration, net_net_duration = self.NN.optimization(M, J, L)
@@ -167,8 +166,8 @@ class Tutorial:
 if __name__ == '__main__':
     # filename='example.log'
     # stream=sys.stderr,
-    # TODO: Verify this has an effect
-    # device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    # TODO: verify this has an effect
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     folder_name = "Testrun1"
     working_directory = pathlib.Path().absolute()
     output_location = working_directory / f'{folder_name}'
@@ -190,122 +189,25 @@ if __name__ == '__main__':
 
     c1 = Config.Config("2", log)
     log.info("time for config is %s seconds" % round((time.time() - config_time), 3))
+
     """
     log.debug("hi")
     log.critical("iovbu")
     log.warning("onvödsgo")
     log.error("zkigbaezg")
     """
-    # NN = NN.NN(c1)
-    # NN.test2()
 
-    # lokaleMainRoutine = MainRoutine(c1, log, out)
-    # lokaleMainRoutine.MainSchleife()
+    test = True
+    # test = False
 
-    # out.create_pdf()
+    if test:
+        Model = MathematicalModel.MathematicalModel(c1.T, c1.d, c1.mu, c1.sigma, c1.g, c1.xi)
+        tests = Tests.Tests(out, Model)
+        tests.test_good()
+    else:
+        lokaleMainRoutine = MainRoutine(c1, log, out)
+        lokaleMainRoutine.MainSchleife()
+
+        out.create_pdf()
 
     log.info("time for everything is %s seconds" % round((time.time() - start_time), 3))
-
-    # I will try to verify the universal approximation theorem on an arbitrary function
-
-    import torch
-    from torch import nn
-    from torch.autograd import Variable
-    import numpy as np
-    import pandas as pd
-    import matplotlib.pyplot as plt
-    from sklearn.model_selection import train_test_split
-    from sklearn.metrics import accuracy_score
-    import torch.optim as optim
-
-
-    def f_x(x):
-        return x * x / 64 - 5 * x / 4 + 25
-
-
-    # Building dataset
-    def build_dataset():
-        # Given f(x), is_f_x defines whether the function is satisfied
-        x_values = np.ones((21, 1))
-        for i in range(0, 21):
-            x_values[i] = i + 30  # True
-        return x_values
-
-
-    x_values = build_dataset()
-
-    # Building nn
-    # activation_function = nn.SELU() #2.3 and better
-    activation_function = nn.SELU()
-    # net = nn.Sequential(nn.Linear(1, 100), nn.ReLU(), nn.Linear(100, 100), nn.ReLU(), nn.Linear(100, 1))
-    # net = nn.Sequential(nn.Linear(1, 1000), activation_function, nn.Linear(1000, 1000), activation_function, nn.Linear(1000, 1000), activation_function, nn.Linear(1000, 1))
-    net = nn.Sequential(nn.Linear(1, 50), nn.Tanh(), nn.Linear(50, 50), nn.Tanh(), nn.Linear(50, 1))
-    # parameters
-    # optimizer = optim.Adam(net.parameters(), lr=0.00001)
-    # optimizer = optim.Rprop(net.parameters(), lr=0.00001)
-    optimizer = optim.Adam(net.parameters(), lr=0.01)
-    scheduler = optim.lr_scheduler.ExponentialLR(optimizer, 0.99)
-    epochs = 1000
-
-
-    def out(k):
-        # folder_name = "Testrun1"
-        # working_directory = pathlib.Path().absolute()
-        # output_location = working_directory / f'{folder_name}'
-
-        a = 30
-        b = 50
-
-        # TODO: copy graph so i only use a copy when it was still open
-
-        import matplotlib.backends.backend_pdf as pdfp
-        from pylab import plot, show, grid, xlabel, ylabel
-        import matplotlib.pyplot as plt
-        # pdf = pdfp.PdfPages("graph" + str(k) + ".pdf")
-
-        t = np.linspace(a, b, 20)
-        x = np.zeros(t.shape[0])
-        c_fig = plt.figure()
-
-        for j in range(len(t)):
-            h = torch.tensor(np.ones(1) * t[j], dtype=torch.float32)
-            x[j] = net(h)
-        plt.ylim([0, 1])
-        plot(t, x, linewidth=4)
-        xlabel('x', fontsize=16)
-        ylabel('net(x)', fontsize=16)
-        grid(True)
-        show()
-        # pdf.savefig(c_fig)
-
-        # pdf.close()
-        plt.close(c_fig)
-
-
-    def train():
-        net.train()
-        losses = []
-        for epoch in range(1, epochs):
-            x_train = Variable(torch.from_numpy(x_values)).float()
-            y_train = f_x(x_train)
-            y_pred = net(x_train)
-            # loss = torch.sum(torch.abs(y_pred - y_train))
-            loss = ((y_pred - y_train) ** 2).sum()
-            print("epoch #", epoch)
-            print(loss.item())
-            losses.append(loss.item())
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-        return losses
-
-
-    print("training start....")
-    losses = train()
-    plt.plot(range(1, epochs), losses)
-    plt.xlabel("epoch")
-    plt.ylabel("loss train")
-    plt.ylim([0, 100])
-    plt.show()
-
-    out(epochs)
