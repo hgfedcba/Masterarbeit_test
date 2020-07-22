@@ -3,6 +3,7 @@ from pylab import plot, show, grid, xlabel, ylabel
 import matplotlib.pyplot as plt
 import matplotlib.backends.backend_pdf as pdfp
 import torch
+import os
 
 
 class Output:
@@ -18,35 +19,32 @@ class Output:
         self.net_net_duration = []
         self.output_location = output_location
 
-        import os
-
-        print("Current Working Directory ", os.getcwd())
+        # print("Current Working Directory ", os.getcwd())
 
         try:
             # Change the current working Directory
             os.chdir(output_location)
-            print("Directory changed")
+            # print("Directory changed")
         except OSError:
             print("Can't change the Current Working Directory")
-        print("Current Working Directory ", os.getcwd())
-
+        # print("Current Working Directory ", os.getcwd())
+        """
         # Check if New path exists
         if os.path.exists(output_location):
             # Change the current working Directory
             os.chdir(output_location)
         else:
             print("Can't change the Current Working Directory")
+        """
 
-        print("Current Working Directory ", os.getcwd())
-
-    def create_pdf(self):
+    def create_pdf(self, name):
         a = min(self.config.xi, self.config.xi + self.Model.getT() * self.Model.getmu(1))
         b = max(self.config.xi, self.config.xi + self.Model.getT() * self.Model.getmu(1))
         a = a - 1.5 * self.Model.getT() * self.Model.getsigma(1)
         b = b + 1.5 * self.Model.getT() * self.Model.getsigma(1)
 
         # TODO: copy graph so i only use a copy when it was still open
-        pdf = pdfp.PdfPages("graph.pdf")
+        pdf = pdfp.PdfPages(name)
 
         t = np.linspace(a, b, 20)
         l = len(self.NN.u)

@@ -73,12 +73,14 @@ class NN:
         params = []
         for k in range(len(self.u)):
             params += list(self.u[k].parameters())
-        optimizer = optim.SGD(params, lr=self.lr, momentum=0.9)
+        # optimizer = optim.SGD(params, lr=self.lr, momentum=0.9)
+        optimizer = optim.Adam(params, lr=self.lr)
         scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=self.lr_sheduler_breakpoints, gamma=self.lr)
 
         val_bm_list = []
         val_path_list = []
-        val_value_list = []
+        val_continuos_value_list = []
+        val_discrete_value_list = []
         val_individual_payoffs = []
         val_duration = []
 
@@ -86,90 +88,172 @@ class NN:
             val_bm_list.append(self.generate_bm())
             val_path_list.append(self.generate_path(val_bm_list[l]))
 
+        pretrain_start = time.time()
+        self.pretrain()
+        log.info("pretrain took \t%s" % (time.time() - pretrain_start))
+
         train_duration = []
 
         for m in range(M):
             self.net_net_duration.append(0)
             m_th_iteration_time = time.time()
-            bm_list = []
-            training_path_list = []
-            individual_payoffs.append([])
-            U = torch.empty(J, self.N + 1)
-
-            # zero the parameter gradients
-            optimizer.zero_grad()
-            # torch.autograd.set_detect_anomaly(True)
 
             train_duration.append(time.time())
-            for j in range(J):
-                bm_list.append(self.generate_bm())
-                training_path_list.append(self.generate_path(bm_list[j]))
-                # self.draw(self.training_path_list[j])
-
-                # U[j, :] = self.generate_stopping_time_factors_from_path(training_path_list[j])
-                h = self.generate_stopping_time_factors_from_path(training_path_list[j])
-                U[j, :] = h[:, 0]
-                individual_payoffs[m].append(self.calculate_payoffs(U[j, :], training_path_list[j], self.Model.getg, self.t))
-            mean = torch.sum(torch.stack(individual_payoffs[m])) / len(individual_payoffs[m])
-            average_payoff.append(mean)
-
-            loss = -average_payoff[m]
-            loss.backward()
-            # TODO: deactivate requires grad
-            # loss = torch.norm(U)
-            # loss.backward()
-            t = time.time()
-            optimizer.step()
-            self.net_net_duration[-1] += time.time() - t
+            self.train(optimizer, individual_payoffs, average_payoff, J, m)
             train_duration[m] = time.time() - train_duration[m]
 
             # validation
-            val_individual_payoffs.append([])
-            U = torch.empty(L, self.N + 1)
-            val_duration.append(time.time())
-
-            tau_list = []
-            for l in range(L):
-                h = self.generate_stopping_time_factors_from_path(val_path_list[l])
-                U[l, :] = h[:, 0]
-                val_individual_payoffs[m].append(self.calculate_payoffs(U[l, :], val_path_list[l], self.Model.getg, self.t))
-
-                for_debugging1 = val_path_list[l]
-                for_debugging2 = h[:, 0]
-                for_debugging3 = val_individual_payoffs[m][l]
-
-                # part 2
-                tau_set = np.zeros(self.N + 1)
-                for n in range(tau_set.size):
-                    h1 = torch.sum(U[l, 0:n + 1]).item()
-                    h2 = 1 - U[l, n].item()
-                    h3 = sum(U[l, 0:n]) >= 1 - U[l, n]
-                    tau_set[n] = torch.sum(U[l, 0:n + 1]).item() >= 1 - U[l, n].item()
-                tau_list.append(np.argmax(tau_set))  # argmax returns the first "True" entry
-                for_debugging4 = tau_list[l]
-
-            another_list = []
-            for l2 in range(L):
-                actual_stopping_time = np.zeros(self.N + 1)
-                actual_stopping_time[tau_list[l2]] = 1
-                another_list.append(self.calculate_payoffs(actual_stopping_time, val_path_list[l2], self.Model.getg, self.t).item())
-
-            val_value_list.append(torch.sum(torch.stack(val_individual_payoffs[m])) / len(val_individual_payoffs[m]))
-            val_duration[m] = time.time() - val_duration[m]
-            log.info("After \t%s iterations the continuous value is\t %s and the discrete value is \t%s" % (m, round(val_value_list[m].item(), 3), round(sum(another_list) / L, 3)))
+            self.validate(L, m, val_individual_payoffs, val_duration, val_path_list, val_continuos_value_list, val_discrete_value_list)
+            log.info(
+                "After \t%s iterations the continuous value is\t %s and the discrete value is \t%s" % (m, round(val_continuos_value_list[m].item(), 3), round(val_discrete_value_list[m], 3)))
 
             scheduler.step()  # TODO:verify
 
             if m == 25:
                 assert True
 
-        return individual_payoffs, average_payoff, val_value_list, train_duration, val_duration, self.net_net_duration
+        return individual_payoffs, average_payoff, val_continuos_value_list, train_duration, val_duration, self.net_net_duration
 
-    def train(self):
-        assert True
+    def pretrain(self):
+        from torch.autograd import Variable
+        import matplotlib.pyplot as plt
+        for m in range(len(self.u)):
+            def f_x(x):
+                return (torch.relu(40 - x) / 8) ** 2
+                # return x * x / 64 - 5 * x / 4 + 25
 
-    def validate(self):
-        assert True
+            x_values = np.ones((21, 1))
+            for i in range(0, 21):
+                x_values[i] = i + 30  # True
+
+            # net = nn.Sequential(nn.Linear(1, 50), nn.Tanh(), nn.Linear(50, 50), nn.Tanh(), nn.Linear(50, 1))
+            net = self.u[m]
+
+            optimizer = optim.Adam(net.parameters(), lr=0.01)
+            scheduler = optim.lr_scheduler.ExponentialLR(optimizer, 0.99)
+            epochs = 800
+
+            def out(k):
+                a = 30
+                b = 50
+
+                import matplotlib.backends.backend_pdf as pdfp
+                from pylab import plot, show, grid, xlabel, ylabel
+                # pdf = pdfp.PdfPages("graph" + str(k) + ".pdf")
+
+                t = np.linspace(a, b, 20)
+                x = np.zeros(t.shape[0])
+                c_fig = plt.figure()
+
+                for j in range(len(t)):
+                    h = torch.tensor(np.ones(1) * t[j], dtype=torch.float32)
+                    x[j] = net(h)
+                plt.ylim([0, 1])
+                plot(t, x, linewidth=4)
+                xlabel('x', fontsize=16)
+                ylabel('net(x)', fontsize=16)
+                grid(True)
+                show()
+                # pdf.savefig(c_fig)
+
+                # pdf.close()
+                plt.close(c_fig)
+
+            def train():
+                net.train()
+                losses = []
+                for epoch in range(1, epochs):
+                    x_train = Variable(torch.from_numpy(x_values)).float()
+                    y_train = f_x(x_train)
+                    y_pred = net(x_train)
+                    loss = ((y_pred - y_train) ** 2).sum()
+                    # print("epoch #", epoch)
+                    # print(loss.item())
+                    losses.append(loss.item())
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
+
+                    if losses[-1] < 1:
+                        epoch = epochs
+                return losses
+
+
+            # print("training start....")
+            losses = train()
+            """
+            plt.plot(range(1, epochs), losses)
+            plt.xlabel("epoch")
+            plt.ylabel("loss train")
+            plt.ylim([0, 100])
+            plt.show()
+            plt.close()
+
+            out(epochs)
+            """
+
+    def train(self, optimizer, individual_payoffs, average_payoff, J, m):
+        bm_list = []
+        training_path_list = []
+        individual_payoffs.append([])
+        U = torch.empty(J, self.N + 1)
+
+        for j in range(J):
+            bm_list.append(self.generate_bm())
+            training_path_list.append(self.generate_path(bm_list[j]))
+
+            # U[j, :] = self.generate_stopping_time_factors_from_path(training_path_list[j])
+            h = self.generate_stopping_time_factors_from_path(training_path_list[j])
+            U[j, :] = h[:, 0]
+            individual_payoffs[m].append(self.calculate_payoffs(U[j, :], training_path_list[j], self.Model.getg, self.t))
+        mean = torch.sum(torch.stack(individual_payoffs[m])) / len(individual_payoffs[m])
+        average_payoff.append(mean)
+
+        loss = -average_payoff[m]
+        optimizer.zero_grad()
+        # torch.autograd.set_detect_anomaly(True)
+        loss.backward()
+        # TODO: deactivate requires grad
+        # loss = torch.norm(U)
+        # loss.backward()
+        t = time.time()
+        optimizer.step()
+        self.net_net_duration[-1] += time.time() - t
+
+    def validate(self, L, m, val_individual_payoffs, val_duration, val_path_list, val_continuos_value_list, val_discrete_value_list):
+        val_individual_payoffs.append([])
+        U = torch.empty(L, self.N + 1)
+        val_duration.append(time.time())
+
+        local_list = []
+
+        tau_list = []
+        for l in range(L):
+            h = self.generate_stopping_time_factors_from_path(val_path_list[l])
+            U[l, :] = h[:, 0]
+            val_individual_payoffs[m].append(self.calculate_payoffs(U[l, :], val_path_list[l], self.Model.getg, self.t))
+
+            for_debugging1 = val_path_list[l]
+            for_debugging2 = h[:, 0]
+            for_debugging3 = val_individual_payoffs[m][l]
+
+            # part 2: discrete
+            tau_set = np.zeros(self.N + 1)
+            for n in range(tau_set.size):
+                h1 = torch.sum(U[l, 0:n + 1]).item()
+                h2 = 1 - U[l, n].item()
+                h3 = sum(U[l, 0:n]) >= 1 - U[l, n]
+                tau_set[n] = torch.sum(U[l, 0:n + 1]).item() >= 1 - U[l, n].item()
+            tau_list.append(np.argmax(tau_set))  # argmax returns the first "True" entry
+            for_debugging4 = tau_list[l]
+
+            actual_stopping_time = np.zeros(self.N + 1)
+            actual_stopping_time[tau_list[l]] = 1
+            local_list.append(self.calculate_payoffs(actual_stopping_time, val_path_list[l], self.Model.getg, self.t).item())
+
+        val_discrete_value_list.append(sum(local_list) / L)
+        val_continuos_value_list.append(torch.sum(torch.stack(val_individual_payoffs[m])) / len(val_individual_payoffs[m]))
+        val_duration[m] = time.time() - val_duration[m]
 
     def generate_partition(self, T):
         out = np.zeros(self.N + 1)
@@ -214,6 +298,7 @@ class NN:
                 sum.append(sum[n - 1] + U[n - 1])  # 0...n-1
             else:
                 sum.append(0)
+                # drop requires_grad?
             x.append(torch.tensor(x_input[:, n], dtype=torch.float32, requires_grad=True))
             if n < self.N:
                 t = time.time()

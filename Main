@@ -198,7 +198,7 @@ if __name__ == '__main__':
     """
 
     test = True
-    # test = False
+    test = False
 
     if test:
         Model = MathematicalModel.MathematicalModel(c1.T, c1.d, c1.mu, c1.sigma, c1.g, c1.xi)
@@ -208,6 +208,6 @@ if __name__ == '__main__':
         lokaleMainRoutine = MainRoutine(c1, log, out)
         lokaleMainRoutine.MainSchleife()
 
-        out.create_pdf()
+        out.create_pdf("net_values.pdf")
 
     log.info("time for everything is %s seconds" % round((time.time() - start_time), 3))
