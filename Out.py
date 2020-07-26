@@ -1,3 +1,5 @@
+import datetime
+import time
 import numpy as np
 from pylab import plot, show, grid, xlabel, ylabel
 import matplotlib.pyplot as plt
@@ -12,6 +14,8 @@ class Output:
         self.NN = 0
         self.config = 0
         self.Model = 0
+        self.T = 0
+        self.N = 0
         self.average_payoff = []
         self.val_value_list = []
         self.train_duration = []
@@ -56,7 +60,7 @@ class Output:
                 h = torch.tensor(np.ones(1) * t[j], dtype=torch.float32)
                 x[k][j] = self.NN.u[k](h)
             help = x[k][:]
-            plt.ylim([0, 1])
+            plt.ylim([0, 0.5])  # ylim-max is 0.5 since u is small anyway
             plot(t, x[k][:], linewidth=4)
             xlabel('x', fontsize=16)
             ylabel('u_%s(x)' % k, fontsize=16)
@@ -66,77 +70,96 @@ class Output:
 
         pdf.close()
 
-        """
-        def _plot_fig(train_results, valid_results, model_name):
-        colors = ["red", "blue", "green"]
-        xs = np.arange(1, train_results.shape[1]+1)
-        plt.figure()
-        legends = []
-        for i in range(train_results.shape[0]):
-            plt.plot(xs, train_results[i], color=colors[i], linestyle="solid", marker="o")
-            plt.plot(xs, valid_results[i], color=colors[i], linestyle="dashed", marker="o")
-            legends.append("train-%d"%(i+1))
-            legends.append("valid-%d"%(i+1))
-        plt.xlabel("Epoch")
-        plt.ylabel("Normalized Gini")
-        plt.title("%s"%model_name)
-        plt.legend(legends)
-        plt.savefig("./fig/%s.png"%model_name)
-        plt.close()
-    """
-
-        """
-        t = np.linspace(0.0, self.Model.getT(), self.N + 1)
-        for k in range(self.Model.getd()):
-            plot(t, x[k])
+    def draw_in_given_plot(self, x, string):
+        plt.figure(string)
+        t = np.linspace(0.0, self.T, self.N + 1)
+        for l in range(len(x)):
+            plot(t, x[l].flatten())
         xlabel('t', fontsize=16)
         ylabel('x', fontsize=16)
+
+    def draw(self, x):
+        h = time.time()
+        string = int(h)
+        self.draw_in_given_plot(x, string)
+        plt.figure(string)
         grid(True)
-        show()
-        """
-        """
-        fig = plt.figure()
-        x = np.arange(10)
-        y = 2.5 * np.sin(x / 20 * np.pi)
-        yerr = np.linspace(0.05, 0.2, 10)
+        # show()
+        # plt.close(fig)
 
-        plt.errorbar(x, y + 3, yerr=yerr, label='both limits (default)')
+        return string
 
-        plt.errorbar(x, y + 2, yerr=yerr, uplims=True, label='uplims=True')
+    """
+    def _plot_fig(train_results, valid_results, model_name):
+    colors = ["red", "blue", "green"]
+    xs = np.arange(1, train_results.shape[1]+1)
+    plt.figure()
+    legends = []
+    for i in range(train_results.shape[0]):
+        plt.plot(xs, train_results[i], color=colors[i], linestyle="solid", marker="o")
+        plt.plot(xs, valid_results[i], color=colors[i], linestyle="dashed", marker="o")
+        legends.append("train-%d"%(i+1))
+        legends.append("valid-%d"%(i+1))
+    plt.xlabel("Epoch")
+    plt.ylabel("Normalized Gini")
+    plt.title("%s"%model_name)
+    plt.legend(legends)
+    plt.savefig("./fig/%s.png"%model_name)
+    plt.close()
+    """
 
-        plt.errorbar(x, y + 1, yerr=yerr, uplims=True, lolims=True,
-                     label='uplims=True, lolims=True')
+    """
+    t = np.linspace(0.0, self.Model.getT(), self.N + 1)
+    for k in range(self.Model.getd()):
+        plot(t, x[k])
+    xlabel('t', fontsize=16)
+    ylabel('x', fontsize=16)
+    grid(True)
+    show()
+    """
+    """
+    fig = plt.figure()
+    x = np.arange(10)
+    y = 2.5 * np.sin(x / 20 * np.pi)
+    yerr = np.linspace(0.05, 0.2, 10)
 
-        upperlimits = [True, False] * 5
-        lowerlimits = [False, True] * 5
-        plt.errorbar(x, y, yerr=yerr, uplims=upperlimits, lolims=lowerlimits,
-                     label='subsets of uplims and lolims')
+    plt.errorbar(x, y + 3, yerr=yerr, label='both limits (default)')
 
-        plt.legend(loc='lower right')
-        pdf = pdfp.PdfPages("output.pdf")
-        pdf.savefig(fig)
-        pdf.savefig(fig)
-        pdf.close()
-        """
-        """
-        t = np.arange(0.0, 2.0, 0.01)
-        s1 = np.sin(2 * np.pi * t)
-        s2 = np.sin(4 * np.pi * t)
+    plt.errorbar(x, y + 2, yerr=yerr, uplims=True, label='uplims=True')
 
-        plt.figure(1)
-        plt.subplot(211)
-        plt.plot(t, s1)
-        plt.subplot(212)
-        plt.plot(t, 2 * s1)
+    plt.errorbar(x, y + 1, yerr=yerr, uplims=True, lolims=True,
+                 label='uplims=True, lolims=True')
 
-        plt.figure(2)
-        plt.plot(t, s2)
+    upperlimits = [True, False] * 5
+    lowerlimits = [False, True] * 5
+    plt.errorbar(x, y, yerr=yerr, uplims=upperlimits, lolims=lowerlimits,
+                 label='subsets of uplims and lolims')
 
-        plt.figure(1)
-        plt.subplot(211)
-        plt.plot(t, s2, 's')
-        ax = plt.gca()
-        ax.set_xticklabels([])
+    plt.legend(loc='lower right')
+    pdf = pdfp.PdfPages("output.pdf")
+    pdf.savefig(fig)
+    pdf.savefig(fig)
+    pdf.close()
+    """
+    """
+    t = np.arange(0.0, 2.0, 0.01)
+    s1 = np.sin(2 * np.pi * t)
+    s2 = np.sin(4 * np.pi * t)
 
-        plt.show()
-        """
+    plt.figure(1)
+    plt.subplot(211)
+    plt.plot(t, s1)
+    plt.subplot(212)
+    plt.plot(t, 2 * s1)
+
+    plt.figure(2)
+    plt.plot(t, s2)
+
+    plt.figure(1)
+    plt.subplot(211)
+    plt.plot(t, s2, 's')
+    ax = plt.gca()
+    ax.set_xticklabels([])
+
+    plt.show()
+    """

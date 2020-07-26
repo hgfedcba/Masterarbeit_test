@@ -21,18 +21,25 @@ import Out
 
 
 class Net(nn.Module):
-    def __init__(self, d):
+    def __init__(self, d, internal_neurons, activation1, activation2):
         super(Net, self).__init__()
         # an affine operation: y = Wx + b
-        internal_neurons = 50
         self.fc1 = nn.Linear(d, internal_neurons)
         self.fc2 = nn.Linear(internal_neurons, internal_neurons)
         self.fc3 = nn.Linear(internal_neurons, 1)
 
+        self.activation1 = activation1
+        self.activation2 = activation2
+
     def forward(self, y):
+        """
         y = torch.tanh(self.fc1(y))
         y = torch.tanh(self.fc2(y))
         y = torch.sigmoid(self.fc3(y))
+        """
+        y = self.activation1(self.fc1(y))
+        y = self.activation1(self.fc2(y))
+        y = self.activation2(self.fc3(y))
         # y = self.fc3(y)
         return y
 
@@ -51,13 +58,18 @@ class NN:
         self.t = self.generate_partition(self.Model.getT())  # 0=t_0<...<t_N=T
         self.net_net_duration = []
 
+        self.internal_neurons = config.internal_neurons
+        self.activation1 = config.activation1
+        self.activation2 = config.activation2
+        self.optimizer = config.optimizer
+
 
     def define_nets(self):
         self.u = []
         for n in range(self.N):
             # activation_function = nn.SELU()
             # net = nn.Sequential(nn.Linear(1, 300), activation_function, nn.Linear(300, 300), activation_function, nn.Linear(300, 300), activation_function, nn.Linear(300, 1), torch.sigmoid())
-            net = Net(self.d)
+            net = Net(self.d, self.internal_neurons, self.activation1, self.activation2)
             self.u.append(net)
 
     def optimization(self, M, J, L):
@@ -67,22 +79,23 @@ class NN:
 
         self.define_nets()
 
-        individual_payoffs = []
-        average_payoff = []
+        train_individual_payoffs = []
+        train_average_payoff = []
 
         params = []
         for k in range(len(self.u)):
             params += list(self.u[k].parameters())
         # optimizer = optim.SGD(params, lr=self.lr, momentum=0.9)
-        optimizer = optim.Adam(params, lr=self.lr)
+        optimizer = self.optimizer(params, lr=self.lr)
         scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=self.lr_sheduler_breakpoints, gamma=self.lr)
 
         val_bm_list = []
         val_path_list = []
-        val_continuos_value_list = []
+        val_continuous_value_list = []
         val_discrete_value_list = []
         val_individual_payoffs = []
         val_duration = []
+        actual_stopping_time = []
 
         for l in range(L):
             val_bm_list.append(self.generate_bm())
@@ -99,27 +112,28 @@ class NN:
             m_th_iteration_time = time.time()
 
             train_duration.append(time.time())
-            self.train(optimizer, individual_payoffs, average_payoff, J, m)
+            self.train(optimizer, train_individual_payoffs, train_average_payoff, J, m)
             train_duration[m] = time.time() - train_duration[m]
 
             # validation
-            self.validate(L, m, val_individual_payoffs, val_duration, val_path_list, val_continuos_value_list, val_discrete_value_list)
+            h = self.validate(L, m, val_individual_payoffs, val_duration, val_path_list, val_continuous_value_list, val_discrete_value_list)
+            actual_stopping_time.append(h)
             log.info(
-                "After \t%s iterations the continuous value is\t %s and the discrete value is \t%s" % (m, round(val_continuos_value_list[m].item(), 3), round(val_discrete_value_list[m], 3)))
+                "After \t%s iterations the continuous value is\t %s and the discrete value is \t%s" % (m, round(val_continuous_value_list[m].item(), 3), round(val_discrete_value_list[m], 3)))
 
             scheduler.step()  # TODO:verify
 
             if m == 25:
                 assert True
 
-        return individual_payoffs, average_payoff, val_continuos_value_list, train_duration, val_duration, self.net_net_duration
+        return train_individual_payoffs, train_average_payoff, val_continuous_value_list, val_discrete_value_list, val_path_list, actual_stopping_time, train_duration, val_duration, self.net_net_duration
 
     def pretrain(self):
         from torch.autograd import Variable
         import matplotlib.pyplot as plt
         for m in range(len(self.u)):
             def f_x(x):
-                return (torch.relu(40 - x) / 8) ** 2
+                return (torch.relu(39 - x) / 8) ** 2
                 # return x * x / 64 - 5 * x / 4 + 25
 
             x_values = np.ones((21, 1))
@@ -210,6 +224,7 @@ class NN:
         average_payoff.append(mean)
 
         loss = -average_payoff[m]
+        # loss = average_payoff[m] # wrong!!!
         optimizer.zero_grad()
         # torch.autograd.set_detect_anomaly(True)
         loss.backward()
@@ -226,7 +241,7 @@ class NN:
         val_duration.append(time.time())
 
         local_list = []
-
+        actual_stopping_times = []
         tau_list = []
         for l in range(L):
             h = self.generate_stopping_time_factors_from_path(val_path_list[l])
@@ -242,7 +257,7 @@ class NN:
             for n in range(tau_set.size):
                 h1 = torch.sum(U[l, 0:n + 1]).item()
                 h2 = 1 - U[l, n].item()
-                h3 = sum(U[l, 0:n]) >= 1 - U[l, n]
+                h3 = sum(U[l, 0:n + 1]) >= 1 - U[l, n]
                 tau_set[n] = torch.sum(U[l, 0:n + 1]).item() >= 1 - U[l, n].item()
             tau_list.append(np.argmax(tau_set))  # argmax returns the first "True" entry
             for_debugging4 = tau_list[l]
@@ -250,10 +265,13 @@ class NN:
             actual_stopping_time = np.zeros(self.N + 1)
             actual_stopping_time[tau_list[l]] = 1
             local_list.append(self.calculate_payoffs(actual_stopping_time, val_path_list[l], self.Model.getg, self.t).item())
+            actual_stopping_times.append(actual_stopping_time)
 
         val_discrete_value_list.append(sum(local_list) / L)
         val_continuos_value_list.append(torch.sum(torch.stack(val_individual_payoffs[m])) / len(val_individual_payoffs[m]))
         val_duration[m] = time.time() - val_duration[m]
+
+        return actual_stopping_times
 
     def generate_partition(self, T):
         out = np.zeros(self.N + 1)

@@ -19,6 +19,7 @@ import coloredlogs
 import matplotlib.pyplot as plt
 import matplotlib.backends.backend_pdf as pdfp
 import Tests
+from copy import deepcopy
 
 
 class MainRoutine:
@@ -43,7 +44,9 @@ class MainRoutine:
         L = self.config.val_size  # valsize
         # TODO: Antithetic variables. Only invert brownian motion. Only works if f and -f are negativly correlated, f.e. f monoton.
 
-        individual_payoffs, average_payoff, val_value_list, train_duration, val_duration, net_net_duration = self.NN.optimization(M, J, L)
+        train_individual_payoffs, train_average_payoff, val_continuous_value_list, val_discrete_value_list, val_path_list, actual_stopping_times, train_duration, val_duration, net_net_duration = self.NN.optimization(
+            M, J,
+            L)
         log.info("\n")
         """
         for k in range(len(val_value_list)):
@@ -62,15 +65,25 @@ class MainRoutine:
             h = path_list[l]
             self.draw(path_list[l])
         """
+
         # NN, Model, config, average_payoff, val_value_list, train_duration, val_duration, net_net_duration):
         self.out.NN = self.NN
         self.out.config = self.config
         self.out.Model = self.Model
-        self.out.average_payoff = average_payoff
-        self.out.val_value_list = val_value_list
+        self.out.average_payoff = train_average_payoff
+        self.out.val_value_list = val_continuous_value_list
         self.out.train_duration = train_duration
         self.out.val_duration = val_duration
         self.out.net_net_duration = net_net_duration
+        self.out.T = self.Model.getT()
+        self.out.N = self.N
+
+        string = self.out.draw(val_path_list)
+        plt.figure(string)
+        for k in range(len(val_path_list)):
+            stop_point = np.argmax(actual_stopping_times[-1][k])
+            plt.scatter(stop_point, val_path_list[k].flatten()[stop_point], marker='o')
+        show()
 
 
     def myprint(self, *argv):
@@ -86,17 +99,6 @@ class MainRoutine:
         out = ''.join(str(s) for s in argv)
         out += "\n"
         self.log.info(out)
-
-    def draw(self, x):
-        # Diese Funktion stoppt den Programmfluss bis ich die Graphik geschlossen habe
-
-        t = np.linspace(0.0, self.Model.getT(), self.N + 1)
-        for k in range(self.Model.getd()):
-            plot(t, x[k])
-        xlabel('t', fontsize=16)
-        ylabel('x', fontsize=16)
-        grid(True)
-        show()
 
 
 class Tutorial:
@@ -187,7 +189,15 @@ if __name__ == '__main__':
     start_time = time.time()
     config_time = time.time()
 
+    # initialisiere Configs
+    config_list = []
     c1 = Config.Config("2", log)
+    config_list.append(c1)
+    c2 = deepcopy(c1)
+    c2.xi = 38
+    c2.compute_other_value()
+    config_list.append(c2)
+
     log.info("time for config is %s seconds" % round((time.time() - config_time), 3))
 
     """
@@ -205,9 +215,11 @@ if __name__ == '__main__':
         tests = Tests.Tests(out, Model)
         tests.test_good()
     else:
-        lokaleMainRoutine = MainRoutine(c1, log, out)
-        lokaleMainRoutine.MainSchleife()
+        for k in range(len(config_list)):
+            log.info(str(k) + "-th iteration with parameters: \n" + config_list[k].parameter_string)
+            lokaleMainRoutine = MainRoutine(config_list[k], log, out)
+            lokaleMainRoutine.MainSchleife()
 
-        out.create_pdf("net_values.pdf")
+            out.create_pdf("net_values_" + str(k) + ".pdf")
 
     log.info("time for everything is %s seconds" % round((time.time() - start_time), 3))
