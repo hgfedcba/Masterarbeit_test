@@ -27,7 +27,7 @@ class MainRoutine:
         np.random.seed(seed=config.random_seed)
 
         self.Model = MathematicalModel.MathematicalModel(config.T, config.d, config.mu, config.sigma, config.g, config.xi)
-        self.NN = NN.NN(c1, self.Model, log)
+        self.NN = NN.NN(c1, self.Model, log, out)
         self.config = config
 
         self.N = config.N
@@ -37,34 +37,20 @@ class MainRoutine:
 
     def MainSchleife(self):
         log = self.log
-        # TODO: Output to pdf
-        # TODO: In 1-d: draw u as a function of x
         M = self.config.max_number_iterations  # Number of optimization steps
         J = self.config.batch_size  # Batchsize
         L = self.config.val_size  # valsize
-        # TODO: Antithetic variables. Only invert brownian motion. Only works if f and -f are negativly correlated, f.e. f monoton.
 
         train_individual_payoffs, train_average_payoff, val_continuous_value_list, val_discrete_value_list, val_path_list, actual_stopping_times, train_duration, val_duration, net_net_duration = self.NN.optimization(
             M, J,
             L)
         log.info("\n")
-        """
-        for k in range(len(val_value_list)):
-            self.mylog("The \t", k, "-th iteration took\t", train_duration[k] + val_duration[k], " seconds. The estimated price of the option at this point is \t",
-                       val_value_list[k].item())
-        """
-        self.mylog("Overall training took ", sum(train_duration), " seconds and validation took ", sum(val_duration), " seconds, ", sum(net_net_duration), " of which was spend on the net itself.")
 
-        # TODO: Here i should make a new monte carlo approximation of the payoff after the net stopped optimizing.
-        # TODO: Nevermind. testset vs trainset, i should structre it differently alltogether. train vs test vs validation
-        # log.debug("max is %s\n", torch.max(torch.stack(val_value_list)).item())
+        self.mylog("Overall training took ", sum(train_duration), " seconds and validation took ", sum(val_duration), " seconds. ", sum(net_net_duration),
+                   " of the training time was spend on the net itself.")
+
         if self.config.other_computation_exists:
             log.info("other computation yields: %s", self.config.other_computation)
-        """
-        for l in range(path_list.__len__()):
-            h = path_list[l]
-            self.draw(path_list[l])
-        """
 
         # NN, Model, config, average_payoff, val_value_list, train_duration, val_duration, net_net_duration):
         self.out.NN = self.NN
@@ -78,12 +64,15 @@ class MainRoutine:
         self.out.T = self.Model.getT()
         self.out.N = self.N
 
-        string = self.out.draw(val_path_list)
+        string = self.out.draw_points(val_path_list)
         plt.figure(string)
+        
         for k in range(len(val_path_list)):
             stop_point = np.argmax(actual_stopping_times[-1][k])
             plt.scatter(stop_point, val_path_list[k].flatten()[stop_point], marker='o')
+
         show()
+
 
 
     def myprint(self, *argv):
@@ -101,75 +90,9 @@ class MainRoutine:
         self.log.info(out)
 
 
-class Tutorial:
-    def __init__(self):
-
-        x = torch.rand(5, 3)
-
-        # let us run this cell only if CUDA is available
-        # We will use ``torch.device`` objects to move tensors in and out of GPU
-        if torch.cuda.is_available():
-            device = torch.device("cuda")  # a CUDA device object
-            y = torch.ones_like(x, device=device)  # directly create a tensor on GPU
-            x = x.to(device)  # or just use strings ``.to("cuda")``
-            z = x + y
-            print(z)
-            print(z.to("cpu", torch.double))
-
-
-        class Net(nn.Module):
-
-            def __init__(self):
-                super(Net, self).__init__()
-                # 1 input image channel, 6 output channels, 3x3 square convolution
-                # kernel
-                self.conv1 = nn.Conv2d(1, 6, 3)
-                self.conv2 = nn.Conv2d(6, 16, 3)
-                # an affine operation: y = Wx + b
-                self.fc1 = nn.Linear(16 * 6 * 6, 120)  # 6*6 from image dimension
-                self.fc2 = nn.Linear(120, 84)
-                self.fc3 = nn.Linear(84, 10)
-
-            def forward(self, x):
-                # Max pooling over a (2, 2) window
-                x = F.max_pool2d(F.relu(self.conv1(x)), (2, 2))
-                # If the size is a square you can only specify a single number
-                x = F.max_pool2d(F.relu(self.conv2(x)), 2)
-                x = x.view(-1, self.num_flat_features(x))
-                x = F.relu(self.fc1(x))
-                x = F.relu(self.fc2(x))
-                x = self.fc3(x)
-                return x
-
-            def num_flat_features(self, x):
-                size = x.size()[1:]  # all dimensions except the batch dimension
-                num_features = 1
-                for s in size:
-                    num_features *= s
-                return num_features
-
-
-        net = Net()
-        print(net)
-
-        params = list(net.parameters())
-        print(len(params))
-        print(params[0].size())  # conv1's .weight
-
-        input = torch.randn(1, 1, 32, 32)
-        out = net(input)
-        print(out)
-
-        input = torch.randn(1, 1, 32, 32)
-        out = net(input)
-        print(out)
-
-
 if __name__ == '__main__':
     # filename='example.log'
     # stream=sys.stderr,
-    # TODO: verify this has an effect
-    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     folder_name = "Testrun1"
     working_directory = pathlib.Path().absolute()
     output_location = working_directory / f'{folder_name}'
@@ -179,7 +102,7 @@ if __name__ == '__main__':
     log = logging.getLogger('l')
     logging.basicConfig(format='%(asctime)s:  %(message)s')
     log.setLevel(logging.DEBUG)
-    # coloredlogs.install(level='DEBUG', fmt='%(asctime)s %(message)s', logger=log)
+    # coloredlogs.install(level='DEBUG', fmt='%(asctime)s %(message)s', logger=log) # if i activate this then all the print messages are displayed
 
     fh = logging.FileHandler('log.log')
     formatter = logging.Formatter('%(asctime)s %(message)s')
@@ -193,11 +116,12 @@ if __name__ == '__main__':
     config_list = []
     c1 = Config.Config("2", log)
     config_list.append(c1)
+    """
     c2 = deepcopy(c1)
     c2.xi = 38
     c2.compute_other_value()
     config_list.append(c2)
-
+    """
     log.info("time for config is %s seconds" % round((time.time() - config_time), 3))
 
     """
@@ -216,7 +140,7 @@ if __name__ == '__main__':
         tests.test_good()
     else:
         for k in range(len(config_list)):
-            log.info(str(k) + "-th iteration with parameters: \n" + config_list[k].parameter_string)
+            log.info(str(k) + "-th config with parameters: \n" + config_list[k].parameter_string)
             lokaleMainRoutine = MainRoutine(config_list[k], log, out)
             lokaleMainRoutine.MainSchleife()
 

@@ -13,13 +13,6 @@ import pytest
 import Out
 
 
-# torch.nn.LeakyReLU
-# LeakyReLU(x)=max(0,x)+negative_slope∗min(0,x)
-
-# torch.nn.PReLU(num_parameters=1, init=0.25)
-# PReLU(x)=max(0,x)+a∗min(0,x)
-
-
 class Net(nn.Module):
     def __init__(self, d, internal_neurons, activation1, activation2):
         super(Net, self).__init__()
@@ -45,7 +38,7 @@ class Net(nn.Module):
 
 
 class NN:
-    def __init__(self, config, Model, log):
+    def __init__(self, config, Model, log, out):
 
         self.log = log
         self.lr = config.lr  # Lernrate
@@ -62,6 +55,14 @@ class NN:
         self.activation1 = config.activation1
         self.activation2 = config.activation2
         self.optimizer = config.optimizer
+
+        self.validation_frequency = config.validation_frequency
+        self.antithetic_variables = config.antithetic_variables
+
+        self.out = out
+
+        # TODO: use this
+        self.device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
 
     def define_nets(self):
@@ -85,7 +86,6 @@ class NN:
         params = []
         for k in range(len(self.u)):
             params += list(self.u[k].parameters())
-        # optimizer = optim.SGD(params, lr=self.lr, momentum=0.9)
         optimizer = self.optimizer(params, lr=self.lr)
         scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=self.lr_sheduler_breakpoints, gamma=self.lr)
 
@@ -98,7 +98,10 @@ class NN:
         actual_stopping_time = []
 
         for l in range(L):
-            val_bm_list.append(self.generate_bm())
+            if not self.antithetic_variables or l < L / 2:
+                val_bm_list.append(self.generate_bm())
+            elif l == L / 2:
+                val_bm_list.extend([-item for item in val_bm_list])
             val_path_list.append(self.generate_path(val_bm_list[l]))
 
         pretrain_start = time.time()
@@ -116,10 +119,11 @@ class NN:
             train_duration[m] = time.time() - train_duration[m]
 
             # validation
-            h = self.validate(L, m, val_individual_payoffs, val_duration, val_path_list, val_continuous_value_list, val_discrete_value_list)
-            actual_stopping_time.append(h)
-            log.info(
-                "After \t%s iterations the continuous value is\t %s and the discrete value is \t%s" % (m, round(val_continuous_value_list[m].item(), 3), round(val_discrete_value_list[m], 3)))
+            if m % self.validation_frequency == 0:
+                h = self.validate(L, val_individual_payoffs, val_duration, val_path_list, val_continuous_value_list, val_discrete_value_list)
+                actual_stopping_time.append(h)
+                log.info(
+                    "After \t%s iterations the continuous value is\t %s and the discrete value is \t%s" % (m, round(val_continuous_value_list[-1].item(), 3), round(val_discrete_value_list[-1], 3)))
 
             scheduler.step()  # TODO:verify
 
@@ -134,13 +138,11 @@ class NN:
         for m in range(len(self.u)):
             def f_x(x):
                 return (torch.relu(39 - x) / 8) ** 2
-                # return x * x / 64 - 5 * x / 4 + 25
 
             x_values = np.ones((21, 1))
             for i in range(0, 21):
                 x_values[i] = i + 30  # True
 
-            # net = nn.Sequential(nn.Linear(1, 50), nn.Tanh(), nn.Linear(50, 50), nn.Tanh(), nn.Linear(50, 1))
             net = self.u[m]
 
             optimizer = optim.Adam(net.parameters(), lr=0.01)
@@ -203,7 +205,7 @@ class NN:
             plt.show()
             plt.close()
 
-            out(epochs)
+            self.out.draw_function(self.u[m])
             """
 
     def train(self, optimizer, individual_payoffs, average_payoff, J, m):
@@ -235,7 +237,7 @@ class NN:
         optimizer.step()
         self.net_net_duration[-1] += time.time() - t
 
-    def validate(self, L, m, val_individual_payoffs, val_duration, val_path_list, val_continuos_value_list, val_discrete_value_list):
+    def validate(self, L, val_individual_payoffs, val_duration, val_path_list, val_continuos_value_list, val_discrete_value_list):
         val_individual_payoffs.append([])
         U = torch.empty(L, self.N + 1)
         val_duration.append(time.time())
@@ -246,11 +248,11 @@ class NN:
         for l in range(L):
             h = self.generate_stopping_time_factors_from_path(val_path_list[l])
             U[l, :] = h[:, 0]
-            val_individual_payoffs[m].append(self.calculate_payoffs(U[l, :], val_path_list[l], self.Model.getg, self.t))
+            val_individual_payoffs[-1].append(self.calculate_payoffs(U[l, :], val_path_list[l], self.Model.getg, self.t))
 
             for_debugging1 = val_path_list[l]
             for_debugging2 = h[:, 0]
-            for_debugging3 = val_individual_payoffs[m][l]
+            for_debugging3 = val_individual_payoffs[-1][l]
 
             # part 2: discrete
             tau_set = np.zeros(self.N + 1)
@@ -268,8 +270,8 @@ class NN:
             actual_stopping_times.append(actual_stopping_time)
 
         val_discrete_value_list.append(sum(local_list) / L)
-        val_continuos_value_list.append(torch.sum(torch.stack(val_individual_payoffs[m])) / len(val_individual_payoffs[m]))
-        val_duration[m] = time.time() - val_duration[m]
+        val_continuos_value_list.append(torch.sum(torch.stack(val_individual_payoffs[-1])) / len(val_individual_payoffs[-1]))
+        val_duration[-1] = time.time() - val_duration[-1]
 
         return actual_stopping_times
 
@@ -287,7 +289,8 @@ class NN:
         out = np.zeros((self.Model.getd(), self.N + 1))
         for m in range(self.Model.getd()):
             for n in range(self.N):
-                out[m, n + 1] = scipy.stats.norm.rvs(loc=out[m, n], scale=self.t[n + 1] - self.t[n])
+                # TODO:verify square root
+                out[m, n + 1] = scipy.stats.norm.rvs(loc=out[m, n], scale=(self.t[n + 1] - self.t[n]) ** 0.5)
 
         return out
 
@@ -299,6 +302,7 @@ class NN:
             part2 = self.Model.getmu(out[:, n]) * (self.t[n + 1] - self.t[n])
             part3 = self.Model.getsigma(out[:, n]) @ (bm[:, n + 1] - bm[:, n])
             out[:, n + 1] = out[:, n] + part2 + part3
+            # out[:, n + 1] = out[:, n] * (1 + part2 + part3)  # TODO: hä
 
         return out
 
@@ -332,7 +336,7 @@ class NN:
         if torch.sum(z).item() != pytest.approx(1, 0.00001):
             whatever = torch.sum(z).item()
             assert True
-        assert torch.sum(z).item() == pytest.approx(1, 0.00001)  # TODO: solve this better
+        assert torch.sum(z).item() == pytest.approx(1, 0.00001), "Value: " + str(torch.sum(z).item())  # TODO: solve this better
 
         # w = torch.unsqueeze(z, 0)
 

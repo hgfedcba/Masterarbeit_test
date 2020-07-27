@@ -92,9 +92,14 @@ class Config:
             self.activation2 = torch.sigmoid
             self.optimizer = optim.Adam
 
+            self.validation_frequency = 2
+            self.antithetic_variables = True  # only in validation!
+            self.pretrain = True  # TODO: USE
+
             self.max_number_iterations = 50
             self.batch_size = 16
-            self.val_size = 16
+            self.val_size = 16 * 4
+            # TODO: T=10, N=30
             self.T = 10
             self.N = 10
             self.xi = 40  # der unterschied zwischen 38 und 40 sind 15.9-15 beim baum. Das finde ich falsch.
@@ -108,16 +113,13 @@ class Config:
             self.K = 40  # strike price
             self.delta = 0  # dividend rate
 
-            constant_sigma = 0.25
-
-            # TODO: richtig?
-            constant_sigma = constant_sigma ** 0.5
+            sigma_constant = 0.25
 
             def sigma(x):
-                if isinstance(x, int) or isinstance(x, float):
-                    out = constant_sigma
+                if type(x).__module__ != np.__name__:
+                    out = sigma_constant * x
                 else:
-                    out = constant_sigma * np.identity(x.shape[0])
+                    out = sigma_constant * np.identity(x.shape[0]) @ x
                 return out
 
             self.sigma = sigma
@@ -128,15 +130,10 @@ class Config:
                 return out
             """
 
-            # constant_mu = 0.2
-            constant_mu = self.r - constant_sigma ** 2 / 2
+            mu_constant = (self.r - sigma_constant ** 2 / 2)
 
             def mu(x):
-                if isinstance(x, int) or isinstance(x, float):
-                    out = constant_mu
-                else:
-                    # TODO: Higher dimension is NOT supported here
-                    out = constant_mu * np.ones(x.shape[0])
+                out = mu_constant * x
                 return out
 
             self.mu = mu
@@ -158,7 +155,7 @@ class Config:
                     sum += max(self.K - x[j].item(), 0)
                     # sum += c - x[j]
                 # return torch.exp(-r * t) * sum
-                return sum
+                return math.exp(-self.r * t_in) * sum
 
             self.g = g
 
@@ -166,6 +163,301 @@ class Config:
 
             assert sigma(1) > 0
             assert self.r >= 0
+            """
+            import math
+            import numpy as np
+            import scipy.stats
+            import matplotlib.pyplot as plt
+
+
+            # computes the price of american and european puts in the CRR model
+            def CRR_AmEuPut(S_0, r, sigma, T, M, EU, K):
+                # compute values of u, d and q
+                delta_t = T / M
+                alpha = math.exp(r * delta_t)
+                beta = 1 / 2 * (1 / alpha + alpha * math.exp(math.pow(sigma, 2) * delta_t))
+                u = beta + math.sqrt(math.pow(beta, 2) - 1)
+                d = 1 / u
+                q = (math.exp(r * delta_t) - d) / (u - d)
+
+                # allocate matrix S
+                S = np.zeros((M + 1, M + 1))
+
+                # fill matrix S with stock prices
+                # going down in the matrix means that the stock price goes up
+                for i in range(1, M + 2, 1):
+                    for j in range(1, i + 1, 1):
+                        S[j - 1, i - 1] = S_0 * math.pow(u, j - 1) * math.pow(d, i - j)
+
+                # payoff for put option with strike K
+                def g(S_vector):
+                    return np.maximum(K - S_vector, 0)
+
+                # allocate memory for option prices
+                V = np.zeros((M + 1, M + 1))
+
+                # option price at maturity, formula (1.16) in lecture notes
+                V[:, M] = g(S[:, M])
+
+                # Loop goes backwards through the columns
+                for i in range(M - 1, -1, -1):
+                    # backwards recursion for European option, formula (1.14)
+                    V[0:(i + 1), i] = np.exp(-r * delta_t) * (q * V[1:(i + 2), i + 1] + (1 - q) * V[0:(i + 1), i + 1])
+
+                    # only for american options we compare 'exercising the option', i.e. immediate payoff,
+                    # with 'waiting', i.e. the expected (discounted) value of the next timestep which corresponds to the price
+                    # of a european option, formula (1.15)
+                    if EU == 0:
+                        V[0:(i + 1), i] = np.maximum(g(S[0:(i + 1), i]), V[0:(i + 1), i])
+
+                # first entry of the matrix is the initial option price
+                return V[0, 0]
+
+            # test parameters
+            S_0 = self.xi
+            r = self.r
+            sigma = self.sigma(1)
+            T = self.T
+            M = np.ones(1) * self.N * 10
+            EU = 0
+            K = self.K
+            t = 0
+
+
+            # BS-formula
+            def EuPut_BlackScholes(t, S_t, r, sigma, T, K):
+                d_1 = (math.log(S_t / K) + (r + 1 / 2 * math.pow(sigma, 2)) * (T - t)) / (sigma * math.sqrt(T - t))
+                d_2 = d_1 - sigma * math.sqrt(T - t)
+                Put = K * math.exp(-r * (T - t)) * scipy.stats.norm.cdf(-d_2) - S_t * scipy.stats.norm.cdf(-d_1)
+                return Put
+
+            uoesb = CRR_AmEuPut(S_0, r, sigma, T, 100, EU, K)
+            """
+            """
+            # calculate prices in CRR-model
+            V0 = np.zeros(len(M))
+            for i in range(0, len(M)):
+                V0[i] = CRR_AmEuPut(S_0, r, sigma, T, M[i], EU, K)
+
+            # calculate price with BS-formula
+            BS_price = EuPut_BlackScholes(t, S_0, r, sigma, T, K) * np.ones(len(M))
+
+            # plot comparison and do not forget to label everything
+            plt.plot(M, V0, 'b-', label='Price in the binomial model')
+            plt.plot(M, BS_price, 'red', label='Price with BS-Formula')
+            plt.title('European Put option prices in the binomial model')
+            plt.xlabel('number of steps')
+            plt.ylabel('Option price')
+            plt.legend()
+
+            plt.show()
+            """
+            # C-Exercise 23, SS 2020
+            """
+            import numpy as np
+            import math
+            import matplotlib.pyplot as plt
+
+
+            def SimPaths_Ito_Euler(X0, a, b, T, m, N):
+                Delta_t = T / m
+                Delta_W = np.random.normal(0, math.sqrt(Delta_t), (N, m))
+
+                # Initialize matrix which contains the process values
+                X = np.zeros((N, m + 1))
+
+                # Assign first column starting values
+                X[:, 0] = X0 * np.ones(N)
+
+                # Recursive column-wise simulation according to the algorithms in Section ?.? using one vector of Brownian motion increments
+                for i in range(0, m):
+                    X[:, i + 1] = X[:, i] + a(X[:, i], i * Delta_t) * Delta_t + b(X[:, i], i * Delta_t) * Delta_W[:, i]
+
+                return X
+
+            # Testing Parameters
+            N = 10
+            m = 10
+
+            nu0 = math.pow(0.3, 2)
+            kappa = math.pow(0.3, 2)
+            lmbda = 2.5
+            sigma_tilde = 0.2
+            T = 10
+
+            # Function for the drift of the variance process in the heston model (no time dependence)
+            def a(x, t):
+                return kappa - lmbda * x
+
+            def a(x, t):
+                return self.mu(1)
+
+            # Function for the standard deviation of the variance process in the heston model (no time dependence)
+            def b(x, t):
+                return np.sqrt(x) * sigma_tilde
+
+            def b(x, t):
+                return self.sigma(1)
+
+            X = SimPaths_Ito_Euler(self.xi, a, b, T, m, N)
+
+            plt.clf()
+            t = np.linspace(0, T, m + 1)
+            # plot the first paths in the matrix
+            for i in range(0, 10):
+                plt.plot(t, X[i, :])
+            plt.xlabel('Time')
+            plt.ylabel('Process Value')
+            plt.show()
+            """
+            # C-Exercise 31
+            """
+            import numpy as np
+            import math
+            import matplotlib.pyplot as plt
+            # from C_Exercise_07 import CRR_AmEuPut
+
+
+            def BS_AmPut_FiDi_Explicit(r, sigma, a, b, m, nu_max, T, K):
+                return BS_AmPut_FiDi_General(r, sigma, a, b, m, nu_max, T, K, 0)
+
+
+            # This is the Code from p.82-83
+            def BS_AmPut_FiDi_General(r, sigma, a, b, m, nu_max, T, K, theta):
+                # Compute delta_x, delta_t, x, lambda and set starting w
+                q = (2 * r) / (sigma * sigma)
+                delta_x = (b - a) / m
+                delta_t = (sigma * sigma * T) / (2 * nu_max)
+                lmbda = delta_t / (delta_x * delta_x)
+                x = np.ones(m + 1) * a + np.arange(0, m + 1) * delta_x
+                t = delta_t * np.arange(0, nu_max + 1)
+                g_nu = np.maximum(np.exp(x * 0.5 * (q - 1)) - np.exp(x * 0.5 * (q + 1)), np.zeros(m + 1))
+                w = g_nu[1:m]
+
+                # Building matrix for t-loop
+                lambda_theta = lmbda * theta
+                diagonal = np.ones(m - 1) * (1 + 2 * lambda_theta)
+                secondary_diagonal = np.ones(m - 2) * (- lambda_theta)
+                b = np.zeros(m - 1)
+
+                # t-loop as on p.83.
+                for nu in range(0, nu_max):
+                    g_nuPlusOne = math.exp((q + 1) * (q + 1) * t[nu + 1] / 4.0) * np.maximum(np.exp(x * 0.5 * (q - 1))
+                                                                                             - np.exp(x * 0.5 * (q + 1)),
+                                                                                             np.zeros(m + 1))
+                    b[0] = w[0] + lmbda * (1 - theta) * (w[1] - 2 * w[0] + g_nu[0]) + lambda_theta * g_nuPlusOne[0]
+                    b[1:m - 2] = w[1:m - 2] + lmbda * (1 - theta) * (w[2:m - 1] - 2 * w[1:m - 2] + w[0:m - 3])
+                    b[m - 2] = w[m - 2] + lmbda * (1 - theta) * (g_nu[m] - 2 * w[m - 2] + w[m - 3]) + lambda_theta * g_nuPlusOne[m]
+
+                    # Use Brennan-Schwartz algorithm to solve the linear equation system
+                    w = solve_system_put(diagonal, secondary_diagonal, secondary_diagonal, b, g_nuPlusOne[1:m])
+
+                    g_nu = g_nuPlusOne
+
+                S = K * np.exp(x[1:m])
+                v = K * w * np.exp(- 0.5 * x[1:m] * (q - 1) - 0.5 * sigma * sigma * T * ((q - 1) * (q - 1) / 4 + q))
+
+                return S, v
+
+
+            # This is the code from Lemma 5.3
+            def solve_system_put(alpha, beta, gamma, b, g):
+                n = len(alpha)
+                alpha_hat = np.zeros(n)
+                b_hat = np.zeros(n)
+                x = np.zeros(n)
+
+                alpha_hat[n - 1] = alpha[n - 1]
+                b_hat[n - 1] = b[n - 1]
+                for i in range(n - 2, -1, -1):
+                    alpha_hat[i] = alpha[i] - beta[i] / alpha_hat[i + 1] * gamma[i]
+                    b_hat[i] = b[i] - beta[i] / alpha_hat[i + 1] * b_hat[i + 1]
+                x[0] = np.maximum(b_hat[0] / alpha_hat[0], g[0])
+                for i in range(1, n):
+                    x[i] = np.maximum((b_hat[i] - gamma[i - 1] * x[i - 1]) / alpha_hat[i], g[i])
+                return x
+
+
+            # Initialize the test parameters given in the exercise.
+            r = self.r
+            sigma = self.sigma(1)
+            # a = - 0.7
+            # b = 0.4
+            # nu_max = 2000
+            a = -0.5
+            b = 0.5
+            nu_max = 100
+            m = self.N
+            T = self.T
+            K = self.K
+
+            initial_stock, option_prices = BS_AmPut_FiDi_Explicit(r, sigma, a, b, m, nu_max,
+                                                                  T, K)
+            exercise7 = np.zeros(len(initial_stock))
+            for j in range(0, len(initial_stock)):
+                exercise7[j] = CRR_AmEuPut(initial_stock[j], r, sigma, T, 500, 0, K)
+
+            # Compute the absolute difference between the approximation and the option prices from exercise 7
+            absolute_errors = np.abs(option_prices - exercise7)
+
+            print(option_prices)
+
+            # Compare the results by plotting the absolute error.
+            plt.plot(initial_stock, absolute_errors)
+            plt.plot(initial_stock, option_prices)
+            plt.plot(initial_stock, exercise7)
+            plt.xlabel('initial stock price')
+            plt.ylabel('absolute difference')
+            plt.title('The absolute difference between the finite difference approximation with the explicit scheme and the'
+                      ' option prices from exercise 7')
+            plt.show()
+            """
+            """
+            # C-Exercise 24, SS 2020
+            import numpy as np
+            import math
+            import matplotlib.pyplot as plt
+
+            def Sim_Paths_GeoBM(X0, mu, sigma, T, N):
+                Delta_t = T / N
+                Delta_W = np.random.normal(0, math.sqrt(Delta_t), (N, 1))
+
+                # Initialize vectors with starting value
+                X_exact = X0 * np.ones(N + 1)
+                X_Euler = X0 * np.ones(N + 1)
+                X_Milshtein = X0 * np.ones(N + 1)
+
+                # Recursive simulation according to the algorithms in Section ?.? using identical Delta_W
+                for i in range(0, N):
+                    X_exact[i + 1] = X_exact[i] * np.exp((mu - math.pow(sigma, 2) / 2) * Delta_t + sigma * Delta_W[i])
+                    X_Euler[i + 1] = X_Euler[i] * (1 + mu * Delta_t + sigma * Delta_W[i])
+                    X_Milshtein[i + 1] = X_Milshtein[i] * (1 + mu * Delta_t + sigma * Delta_W[i] + math.pow(sigma, 2) / 2 * (math.pow((Delta_W[i]), 2) - Delta_t))
+
+                return X_exact, X_Euler, X_Milshtein
+
+            # test parameters
+            X0 = 40
+            sigma = 0.25
+            mu = 0.05 - math.pow(sigma, 2) / 2
+            T = 10
+            N = np.array([10, 100, 1000, 10000])
+
+            # plot
+            plt.clf()
+            for i in range(0, 4):
+                X_exact, X_Euler, X_Milshtein = Sim_Paths_GeoBM(X0, mu, sigma, T, N[i])
+                plt.subplot(2, 2, i + 1)
+                plt.plot(np.arange(0, N[i] + 1) * T / N[i], X_exact, label='Exact Simulation')
+                plt.plot(np.arange(0, N[i] + 1) * T / N[i], X_Euler, 'red', label='Euler approximation')
+                plt.plot(np.arange(0, N[i] + 1) * T / N[i], X_Milshtein, 'green', label='Milshtein approximation')
+                plt.xlabel('t')
+                plt.ylabel('X(t)')
+                plt.title('N=' + str(N[i]))
+                plt.legend()
+
+            plt.show()
+            """
+
 
     def binomial_trees(self, S0, r, sigma, T, N, K):
         delta_T = T / N
@@ -194,7 +486,7 @@ class Config:
                     h1 = max(K - S[j][i], 0)
                     h2 = alpha ** -1 * (q * V[j + 1][i + 1] + (1 - q) * V[j][i + 1])
                     V[j][i] = max(h1, h2)
-                    V_map[j][i] = h1 > h2  # a 1 indicates exercising is good
+                    V_map[j][i] = h1 > h2  # a one indicates exercising is good
         return V[0][0]  # tested
 
     def binomial_trees_BS(self, S0, r_const, mu, sigma, T, k, K):

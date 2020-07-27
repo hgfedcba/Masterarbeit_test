@@ -47,6 +47,10 @@ class Output:
         a = a - 1.5 * self.Model.getT() * self.Model.getsigma(1)
         b = b + 1.5 * self.Model.getT() * self.Model.getsigma(1)
 
+        # TODO: better
+        a = 20
+        b = 50
+
         # TODO: copy graph so i only use a copy when it was still open
         pdf = pdfp.PdfPages(name)
 
@@ -60,7 +64,7 @@ class Output:
                 h = torch.tensor(np.ones(1) * t[j], dtype=torch.float32)
                 x[k][j] = self.NN.u[k](h)
             help = x[k][:]
-            plt.ylim([0, 0.5])  # ylim-max is 0.5 since u is small anyway
+            plt.ylim([0, 1])  # ylim-max is 0.5 since u is small anyway
             plot(t, x[k][:], linewidth=4)
             xlabel('x', fontsize=16)
             ylabel('u_%s(x)' % k, fontsize=16)
@@ -70,15 +74,19 @@ class Output:
 
         pdf.close()
 
+    # TODO: They are not generically working, just for what i am using them for
     def draw_in_given_plot(self, x, string):
         plt.figure(string)
-        t = np.linspace(0.0, self.T, self.N + 1)
+        # TODO: Better
+        self.default_linspace = np.linspace(0.0, self.T, self.N + 1)
+        t = self.default_linspace
         for l in range(len(x)):
+            h = x[l].flatten()
             plot(t, x[l].flatten())
         xlabel('t', fontsize=16)
         ylabel('x', fontsize=16)
 
-    def draw(self, x):
+    def draw_points(self, x):
         h = time.time()
         string = int(h)
         self.draw_in_given_plot(x, string)
@@ -88,6 +96,25 @@ class Output:
         # plt.close(fig)
 
         return string
+
+    def draw_function(self, f):
+        import torch
+        h = time.time()
+        string = int(h)
+        t = self.default_linspace
+        x = []
+        for c in t:
+            h = torch.tensor(c, dtype=torch.float32)
+            x.append(f(h))
+
+        self.draw_in_given_plot(x, string)
+        plt.figure(string)
+        grid(True)
+        # show()
+        # plt.close(fig)
+
+        return string
+
 
     """
     def _plot_fig(train_results, valid_results, model_name):
