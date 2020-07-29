@@ -11,6 +11,7 @@ from scipy import stats
 import time
 import pytest
 import Out
+from BestResult import BestResult
 
 
 class Net(nn.Module):
@@ -48,8 +49,9 @@ class NN:
         self.d = config.d
         self.u = []
         self.Model = Model
-        self.t = self.generate_partition(self.Model.getT())  # 0=t_0<...<t_N=T
+        self.t = config.time_partition
         self.net_net_duration = []
+        self.final_val_size = config.final_val_size
 
         self.internal_neurons = config.internal_neurons
         self.activation1 = config.activation1
@@ -95,7 +97,7 @@ class NN:
         val_discrete_value_list = []
         val_individual_payoffs = []
         val_duration = []
-        actual_stopping_time = []
+        actual_stopping_times_list = []
 
         for l in range(L):
             if not self.antithetic_variables or l < L / 2:
@@ -106,9 +108,11 @@ class NN:
 
         pretrain_start = time.time()
         self.pretrain()
-        log.info("pretrain took \t%s" % (time.time() - pretrain_start))
+        log.info("pretrain took \t%s seconds" % (time.time() - pretrain_start))
 
         train_duration = []
+
+        br = BestResult()
 
         for m in range(M):
             self.net_net_duration.append(0)
@@ -120,28 +124,55 @@ class NN:
 
             # validation
             if m % self.validation_frequency == 0:
-                h = self.validate(L, val_individual_payoffs, val_duration, val_path_list, val_continuous_value_list, val_discrete_value_list)
-                actual_stopping_time.append(h)
+                val_duration.append(time.time())
+                self.validate(val_individual_payoffs, val_path_list, val_continuous_value_list, val_discrete_value_list, actual_stopping_times_list)
+                val_duration[-1] = time.time() - val_duration[-1]
                 log.info(
                     "After \t%s iterations the continuous value is\t %s and the discrete value is \t%s" % (m, round(val_continuous_value_list[-1].item(), 3), round(val_discrete_value_list[-1], 3)))
+
+                if br.val_error_disc < val_discrete_value_list[-1] or (br.val_error_disc == val_discrete_value_list[-1] and br.val_error_cont < val_continuous_value_list[-1]):
+                    br.update(self, m, val_continuous_value_list[-1], val_discrete_value_list[-1], actual_stopping_times_list[-1])
 
             scheduler.step()  # TODO:verify
 
             if m == 25:
                 assert True
 
-        return train_individual_payoffs, train_average_payoff, val_continuous_value_list, val_discrete_value_list, val_path_list, actual_stopping_time, train_duration, val_duration, self.net_net_duration
+        br_bms = []
+        br_paths = []
+
+        for l in range(self.final_val_size):
+            if not self.antithetic_variables or l < self.final_val_size / 2:
+                br_bms.append(self.generate_bm())
+            elif l == self.final_val_size / 2:
+                br_bms.extend([-item for item in br_bms])
+            br_paths.append(self.generate_path(br_bms[l]))
+
+        br.paths = br_paths
+
+        return train_individual_payoffs, train_average_payoff, val_continuous_value_list, val_discrete_value_list, val_path_list, actual_stopping_times_list, train_duration, val_duration, self.net_net_duration, br
 
     def pretrain(self):
         from torch.autograd import Variable
         import matplotlib.pyplot as plt
         for m in range(len(self.u)):
             def f_x(x):
-                return (torch.relu(39 - x) / 8) ** 2
+                # reasonable
+                # return (torch.relu(38 - x) / 30)
+                """
+                # overly accurate
+                h1 = -torch.relu(28 - x) / 10
+                h2 = torch.relu(x - 38) / 10
+                h3 = (38 - x) / 10
+                h4 = h1 + h2 + h3 + 3.8
+                return h4
+                """
+                return (36 - x) / 15 + torch.relu(x - 36) / 15 - torch.relu(21 - x) / 15
 
-            x_values = np.ones((21, 1))
-            for i in range(0, 21):
-                x_values[i] = i + 30  # True
+
+            x_values = np.ones((31, 1))
+            for i in range(0, 31):
+                x_values[i] = i + 20  # True
 
             net = self.u[m]
 
@@ -149,33 +180,7 @@ class NN:
             scheduler = optim.lr_scheduler.ExponentialLR(optimizer, 0.99)
             epochs = 800
 
-            def out(k):
-                a = 30
-                b = 50
-
-                import matplotlib.backends.backend_pdf as pdfp
-                from pylab import plot, show, grid, xlabel, ylabel
-                # pdf = pdfp.PdfPages("graph" + str(k) + ".pdf")
-
-                t = np.linspace(a, b, 20)
-                x = np.zeros(t.shape[0])
-                c_fig = plt.figure()
-
-                for j in range(len(t)):
-                    h = torch.tensor(np.ones(1) * t[j], dtype=torch.float32)
-                    x[j] = net(h)
-                plt.ylim([0, 1])
-                plot(t, x, linewidth=4)
-                xlabel('x', fontsize=16)
-                ylabel('net(x)', fontsize=16)
-                grid(True)
-                show()
-                # pdf.savefig(c_fig)
-
-                # pdf.close()
-                plt.close(c_fig)
-
-            def train():
+            def local_train():
                 net.train()
                 losses = []
                 for epoch in range(1, epochs):
@@ -190,21 +195,22 @@ class NN:
                     loss.backward()
                     optimizer.step()
 
-                    if losses[-1] < 1:
-                        epoch = epochs
+                    if losses[-1] < 0.1:
+                        break
                 return losses
 
-
             # print("training start....")
-            losses = train()
+            losses = local_train()
             """
-            plt.plot(range(1, epochs), losses)
+            # pretrain loss
+            plt.plot(range(0, losses.__len__()), losses)
             plt.xlabel("epoch")
             plt.ylabel("loss train")
-            plt.ylim([0, 100])
+            # plt.ylim([0, 100])
             plt.show()
             plt.close()
 
+            # pretrain endergebnis
             self.out.draw_function(self.u[m])
             """
 
@@ -231,16 +237,14 @@ class NN:
         # torch.autograd.set_detect_anomaly(True)
         loss.backward()
         # TODO: deactivate requires grad
-        # loss = torch.norm(U)
-        # loss.backward()
         t = time.time()
         optimizer.step()
         self.net_net_duration[-1] += time.time() - t
 
-    def validate(self, L, val_individual_payoffs, val_duration, val_path_list, val_continuos_value_list, val_discrete_value_list):
+    def validate(self, val_individual_payoffs, val_path_list, val_continuos_value_list, val_discrete_value_list, actual_stopping_times_list):
+        L = len(val_path_list)
         val_individual_payoffs.append([])
         U = torch.empty(L, self.N + 1)
-        val_duration.append(time.time())
 
         local_list = []
         actual_stopping_times = []
@@ -271,18 +275,10 @@ class NN:
 
         val_discrete_value_list.append(sum(local_list) / L)
         val_continuos_value_list.append(torch.sum(torch.stack(val_individual_payoffs[-1])) / len(val_individual_payoffs[-1]))
-        val_duration[-1] = time.time() - val_duration[-1]
 
-        return actual_stopping_times
+        actual_stopping_times_list.append(actual_stopping_times)
 
-    def generate_partition(self, T):
-        out = np.zeros(self.N + 1)
-
-        for n in range(self.N):
-            out[n + 1] = (n + 1) * T / self.N
-            assert out[n] != out[n + 1]
-
-        return out
+        return val_continuos_value_list[-1].item(), val_discrete_value_list[-1]
 
     def generate_bm(self):
         # Ein Rückgabewert ist ein np.array der entsprechenden Länge, in dem die Werte über den gesamten sample path eingetragen sind
@@ -315,15 +311,18 @@ class NN:
 
         h = []
 
+        # TODO:Parallel?
+
         for n in range(local_N):
             if n > 0:
                 sum.append(sum[n - 1] + U[n - 1])  # 0...n-1
             else:
                 sum.append(0)
-                # drop requires_grad?
+            # x.append(torch.tensor(x_input[:, n], dtype=torch.float32))
             x.append(torch.tensor(x_input[:, n], dtype=torch.float32, requires_grad=True))
             if n < self.N:
                 t = time.time()
+                hu = x[n]
                 h.append(self.u[n](x[n]))
                 self.net_net_duration[-1] += time.time() - t
             else:

@@ -22,6 +22,7 @@ class Output:
         self.val_duration = []
         self.net_net_duration = []
         self.output_location = output_location
+        self.stock_price_partition = 0
 
         # print("Current Working Directory ", os.getcwd())
 
@@ -41,20 +42,18 @@ class Output:
             print("Can't change the Current Working Directory")
         """
 
-    def create_pdf(self, name):
+    def generate_stock_price_partition(self):
         a = min(self.config.xi, self.config.xi + self.Model.getT() * self.Model.getmu(1))
         b = max(self.config.xi, self.config.xi + self.Model.getT() * self.Model.getmu(1))
         a = a - 1.5 * self.Model.getT() * self.Model.getsigma(1)
         b = b + 1.5 * self.Model.getT() * self.Model.getsigma(1)
+        self.stock_price_partition = np.linspace(20, 50, 20)
 
-        # TODO: better
-        a = 20
-        b = 50
-
+    def create_net_pdf(self, name):
         # TODO: copy graph so i only use a copy when it was still open
         pdf = pdfp.PdfPages(name)
 
-        t = np.linspace(a, b, 20)
+        t = self.stock_price_partition
         l = len(self.NN.u)
         x = np.zeros((l, t.shape[0]))
         for k in range(l):
@@ -74,46 +73,55 @@ class Output:
 
         pdf.close()
 
+    def save_fig_in_pdf(self, fig, name):
+        pdf = pdfp.PdfPages(name)
+        pdf.savefig(fig)
+
+        pdf.close()
+
     # TODO: They are not generically working, just for what i am using them for
-    def draw_in_given_plot(self, x, string):
-        plt.figure(string)
+    def draw_in_given_plot(self, x, plot_number, partition):
+        plt.figure(plot_number)
         # TODO: Better
-        self.default_linspace = np.linspace(0.0, self.T, self.N + 1)
-        t = self.default_linspace
+        t = partition
         for l in range(len(x)):
             h = x[l].flatten()
             plot(t, x[l].flatten())
         xlabel('t', fontsize=16)
         ylabel('x', fontsize=16)
 
-    def draw_points(self, x):
-        h = time.time()
-        string = int(h)
-        self.draw_in_given_plot(x, string)
-        plt.figure(string)
+    def draw_point_graph(self, x, plot_number=0):
+        if plot_number == 0:
+            h = time.time()
+            plot_number = int(h)
+        self.draw_in_given_plot(x, plot_number, self.config.time_partition)
+        plt.figure(plot_number)
         grid(True)
         # show()
         # plt.close(fig)
 
-        return string
+        return plot_number
 
-    def draw_function(self, f):
-        import torch
-        h = time.time()
-        string = int(h)
-        t = self.default_linspace
+    def draw_function(self, f, plot_number=0):
+        if plot_number == 0:
+            h = time.time()
+            plot_number = int(h)
+        t = self.stock_price_partition
         x = []
         for c in t:
-            h = torch.tensor(c, dtype=torch.float32)
+            h = torch.tensor([c], dtype=torch.float32)
             x.append(f(h))
 
-        self.draw_in_given_plot(x, string)
-        plt.figure(string)
+        plt.figure(plot_number)
+        plot(t, x)
+        xlabel('x', fontsize=16)
+        ylabel('f(x)', fontsize=16)
+        plt.ylim([0, 1])
         grid(True)
-        # show()
+        show()
         # plt.close(fig)
 
-        return string
+        return plot_number
 
 
     """

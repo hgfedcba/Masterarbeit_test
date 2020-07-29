@@ -156,7 +156,7 @@ graph =
 #                               batch_size=8,
 #                               max_time=learning_max_time,
 #                               working_dir=working_dir)
-#
+#         #filepath = "C:/Users/ofritsche/Dropbox/Arbeit/Test 7/"
 #         path = Path(filepath)
 #
 #         copy2(working_dir / 'metrics.pdf', path / f'{count}.pdf')

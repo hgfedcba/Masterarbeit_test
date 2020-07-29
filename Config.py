@@ -44,7 +44,7 @@ class Config:
 
             def mu(x):
                 if isinstance(x, int) or isinstance(x, float):
-                    out = (self.r - sigma(x) ** 2 / 2)
+                    out = (self.r - sigma_c_x(x) ** 2 / 2)
                 else:
                     # TODO: Higher dimension is NOT supported here
                     out = (r - delta) * np.ones(x.shape[0])
@@ -85,27 +85,42 @@ class Config:
             assert mu(1) > 0
             assert sigma(1) > 0
 
-        elif string == "2":
+        elif string == "am_put1":
             # 2 american puts
             self.internal_neurons = 50
             self.activation1 = torch.tanh
             self.activation2 = torch.sigmoid
             self.optimizer = optim.Adam
 
-            self.validation_frequency = 2
+            self.validation_frequency = 5
             self.antithetic_variables = True  # only in validation!
             self.pretrain = True  # TODO: USE
+            self.pretrain_func = -1  # TODO:USE
 
-            self.max_number_iterations = 50
+            self.stop_paths_in_plot = True  # TODO:use
+
+            self.max_number_iterations = 51
+            self.max_minutes_for_iteration = 30  # TODO:USE
             self.batch_size = 16
-            self.val_size = 16 * 4
-            # TODO: T=10, N=30
+            self.val_size = 32
+            self.final_val_size = 128
             self.T = 10
             self.N = 10
-            self.xi = 40  # der unterschied zwischen 38 und 40 sind 15.9-15 beim baum. Das finde ich falsch.
+            self.xi = 40
             self.lr = 0.0001  # lernrate
-            self.lr_sheduler_breakpoints = [50, 100, 1000]
+            self.lr_sheduler_breakpoints = [100, 1000, 10000, 100000]
             self.random_seed = 23343
+
+            def generate_partition(T):
+                out = np.zeros(self.N + 1)
+
+                for n in range(self.N):
+                    out[n + 1] = (n + 1) * T / self.N
+                    assert out[n] != out[n + 1]
+
+                return out
+
+            self.time_partition = generate_partition(self.T)  # 0=t_0<...<t_N=T
 
             self.d = 1  # dimension
             # TODO: diskontieren?!
@@ -115,14 +130,14 @@ class Config:
 
             sigma_constant = 0.25
 
-            def sigma(x):
+            def sigma_c_x(x):
                 if type(x).__module__ != np.__name__:
                     out = sigma_constant * x
                 else:
                     out = sigma_constant * np.identity(x.shape[0]) @ x
                 return out
 
-            self.sigma = sigma
+            self.sigma = sigma_c_x
 
             """
             def mu(x):
@@ -132,11 +147,11 @@ class Config:
 
             mu_constant = (self.r - sigma_constant ** 2 / 2)
 
-            def mu(x):
+            def mu_c_x(x):
                 out = mu_constant * x
                 return out
 
-            self.mu = mu
+            self.mu = mu_c_x
             """
             def g(t_in, x):
                 t = torch.ones(1) * t_in
@@ -149,7 +164,8 @@ class Config:
                 return sum
             """
 
-            def g(t_in, x):
+            def american_put(t_in, x):
+                # TODO: in-place operation?
                 sum = 0
                 for j in range(self.d):
                     sum += max(self.K - x[j].item(), 0)
@@ -157,12 +173,75 @@ class Config:
                 # return torch.exp(-r * t) * sum
                 return math.exp(-self.r * t_in) * sum
 
-            self.g = g
+            self.g = american_put
 
             self.compute_other_value()
 
-            assert sigma(1) > 0
+            assert sigma_c_x(1) > 0
             assert self.r >= 0
+
+            sigma_dict = {
+                sigma_c_x: str(sigma_constant) + " * x"
+            }
+
+            mu_dict = {
+                mu_c_x: str(mu_constant) + " * x"
+            }
+
+            g_dict = {
+                american_put: "american put"
+            }
+
+            activation_func_dict = {
+                torch.tanh                 : "torch.tanh",
+                torch.sigmoid              : "torch.sigmoid",
+                torch.nn.ELU               : "torch.nn.ELU",
+                torch.nn.Hardshrink        : "torch.nn.Hardshrink",
+                torch.nn.Hardsigmoid       : "torch.nn.Hardsigmoid",
+                torch.nn.Hardtanh          : "torch.nn.Hardtanh",
+                # torch.nn.Hardswish         : "torch.nn.Hardswish",
+                # torch.nn.functional.hardswish: "torch.nn.functional.hardswish",
+                torch.nn.LeakyReLU         : "torch.nn.LeakyReLU",
+                torch.nn.LogSigmoid        : "torch.nn.LogSigmoid",
+                torch.nn.MultiheadAttention: "torch.nn.MultiheadAttention",
+                torch.nn.PReLU             : "torch.nn.PReLU",
+                torch.nn.ReLU              : "torch.nn.ReLU",
+                torch.nn.ReLU6             : "torch.nn.ReLU6",
+                torch.nn.SELU              : "torch.nn.SELU",
+                torch.nn.CELU              : "torch.nn.CELU",
+                torch.nn.GELU              : "torch.nn.GELU",
+                torch.nn.Sigmoid           : "torch.nn.Sigmoid",
+                torch.nn.Softplus          : "torch.nn.Softplus",
+                torch.nn.Softshrink        : "torch.nn.Softshrink",
+                torch.nn.Softsign          : "torch.nn.Softsign",
+                torch.nn.Tanh              : "torch.nn.Tanh",
+                torch.nn.Tanhshrink        : "torch.nn.Tanhshrink",
+                torch.nn.Threshold         : "torch.nn.Threshold"
+            }
+
+            optimizer_dict = {
+                optim.Adam: "Adam"
+            }
+
+            pretrain_func_dict = {
+                self.pretrain_func: "TODO"  # TODO
+            }
+
+            lr_decay_dict = {
+                "hi": "hi"  # TODO
+            }
+
+            # Model, Net, Meta
+            # TODO: 3 obere sachen einzeln. dadurch kann ich auch sehr viel einfacher bestimmte abschnitte aus dem parameterstring entfernen
+            self.parameter_string = "d: ", self.d, " T: ", self.T, " N: ", self.N, " xi: ", self.xi, " r: ", self.r, " K: ", self.K, " delta: ", self.delta, " sigma(x): ", sigma_dict.get(
+                self.sigma), " mu(x): ", mu_dict.get(self.mu), " g: ", g_dict.get(self.g), " internal_neurons: ", self.internal_neurons, " internal_activation_func: ", activation_func_dict.get(
+                self.activation1), " final activation func: ", activation_func_dict.get(self.activation2), " optimizer: ", optimizer_dict.get(
+                self.optimizer), " pretrain?: ", self.pretrain, " pretrain_func: ", pretrain_func_dict.get(
+                self.pretrain_func), " max_iterations: ", self.max_number_iterations, " max_duration(min): ", self.max_minutes_for_iteration, " batch_size: ", self.batch_size, " val_size: ", self.val_size, " final_val_size: ", self.final_val_size, " initial_lernrate: ", self.lr, " type_of_lr_decay", lr_decay_dict.get(
+                "hi"), " validation_frequency: ", self.validation_frequency, " antithetic_variables: ", self.antithetic_variables, " stop_paths_in_plot: ", self.stop_paths_in_plot
+
+            self.parameter_string = ''.join(str(s) + "\t" for s in self.parameter_string)
+            self.parameter_string += "\n"
             """
             import math
             import numpy as np

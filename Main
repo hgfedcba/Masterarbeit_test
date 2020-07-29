@@ -20,6 +20,7 @@ import matplotlib.pyplot as plt
 import matplotlib.backends.backend_pdf as pdfp
 import Tests
 from copy import deepcopy
+import torch.optim as optim
 
 
 class MainRoutine:
@@ -27,7 +28,7 @@ class MainRoutine:
         np.random.seed(seed=config.random_seed)
 
         self.Model = MathematicalModel.MathematicalModel(config.T, config.d, config.mu, config.sigma, config.g, config.xi)
-        self.NN = NN.NN(c1, self.Model, log, out)
+        self.NN = NN.NN(config, self.Model, log, out)
         self.config = config
 
         self.N = config.N
@@ -35,16 +36,25 @@ class MainRoutine:
         self.log = log
         self.out = out
 
-    def MainSchleife(self):
+    def MainSchleife(self, test, iteration_number):
         log = self.log
         M = self.config.max_number_iterations  # Number of optimization steps
         J = self.config.batch_size  # Batchsize
         L = self.config.val_size  # valsize
 
-        train_individual_payoffs, train_average_payoff, val_continuous_value_list, val_discrete_value_list, val_path_list, actual_stopping_times, train_duration, val_duration, net_net_duration = self.NN.optimization(
+        self.out.Model = self.Model
+        self.out.config = self.config
+        self.out.T = self.Model.getT()
+        self.out.N = self.N
+        self.out.generate_stock_price_partition()
+
+        train_individual_payoffs, train_average_payoff, val_continuous_value_list, val_discrete_value_list, val_path_list, actual_stopping_times, train_duration, val_duration, net_net_duration, best_result = self.NN.optimization(
             M, J,
             L)
-        log.info("\n")
+
+        final_val_cont, final_val_disc = best_result.final_validation()
+
+        self.mylog("\n\nLast validation on a set of ", len(best_result.paths), " paths gave a continuous value of ", final_val_cont, " and a discrete value of ", final_val_disc, ".")
 
         self.mylog("Overall training took ", sum(train_duration), " seconds and validation took ", sum(val_duration), " seconds. ", sum(net_net_duration),
                    " of the training time was spend on the net itself.")
@@ -54,31 +64,30 @@ class MainRoutine:
 
         # NN, Model, config, average_payoff, val_value_list, train_duration, val_duration, net_net_duration):
         self.out.NN = self.NN
-        self.out.config = self.config
-        self.out.Model = self.Model
         self.out.average_payoff = train_average_payoff
         self.out.val_value_list = val_continuous_value_list
         self.out.train_duration = train_duration
         self.out.val_duration = val_duration
         self.out.net_net_duration = net_net_duration
-        self.out.T = self.Model.getT()
-        self.out.N = self.N
 
-        string = self.out.draw_points(val_path_list)
-        plt.figure(string)
-        
+        plot_number = int(time.time())
+
+        plot_number = self.out.draw_point_graph(val_path_list)
+        plt.figure(plot_number)
+
         for k in range(len(val_path_list)):
             stop_point = np.argmax(actual_stopping_times[-1][k])
-            plt.scatter(stop_point, val_path_list[k].flatten()[stop_point], marker='o')
+            plt.scatter(self.config.time_partition[stop_point], val_path_list[k].flatten()[stop_point], marker='o')
 
-        show()
+        # plt.ylim([10, 50])
+        if test:
+            show()
+        else:
+            out.save_fig_in_pdf(plt.figure(plot_number), "Paths" + str(iteration_number) + ".pdf")
 
+        # TODO: return final value x2 + parameterstring + meta information string, time/losses etc
 
-
-    def myprint(self, *argv):
-        out = ''.join(str(s) for s in argv)
-        out += "\n"
-        print(out)
+        return final_val_cont, final_val_disc, self.config.parameter_string, train_duration, val_duration, net_net_duration
 
     def mylog(self, *argv):
         argv = list(argv)
@@ -93,6 +102,7 @@ class MainRoutine:
 if __name__ == '__main__':
     # filename='example.log'
     # stream=sys.stderr,
+    # TODO: logging outputname mit datum
     folder_name = "Testrun1"
     working_directory = pathlib.Path().absolute()
     output_location = working_directory / f'{folder_name}'
@@ -110,40 +120,56 @@ if __name__ == '__main__':
     log.addHandler(fh)
 
     start_time = time.time()
-    config_time = time.time()
 
-    # initialisiere Configs
-    config_list = []
-    c1 = Config.Config("2", log)
-    config_list.append(c1)
-    """
-    c2 = deepcopy(c1)
-    c2.xi = 38
-    c2.compute_other_value()
-    config_list.append(c2)
-    """
-    log.info("time for config is %s seconds" % round((time.time() - config_time), 3))
-
-    """
-    log.debug("hi")
-    log.critical("iovbu")
-    log.warning("onvödsgo")
-    log.error("zkigbaezg")
-    """
-
-    test = True
+    # test = True
     test = False
 
     if test:
-        Model = MathematicalModel.MathematicalModel(c1.T, c1.d, c1.mu, c1.sigma, c1.g, c1.xi)
-        tests = Tests.Tests(out, Model)
-        tests.test_good()
-    else:
+        config_time = time.time()
+
+        # initialisiere Configs
+        config_list = []
+        c1 = Config.Config("am_put1", log)
+        config_list.append(c1)
+        """
+        c2 = deepcopy(c1)
+        c2.xi = 38
+        c2.compute_other_value()
+        config_list.append(c2)
+        """
+
+        log.info("time for config is %s seconds" % round((time.time() - config_time), 3))
         for k in range(len(config_list)):
             log.info(str(k) + "-th config with parameters: \n" + config_list[k].parameter_string)
             lokaleMainRoutine = MainRoutine(config_list[k], log, out)
-            lokaleMainRoutine.MainSchleife()
+            lokaleMainRoutine.MainSchleife(test)
 
-            out.create_pdf("net_values_" + str(k) + ".pdf")
+            out.create_net_pdf("net_values_" + str(k) + ".pdf")
+        """
+        Model = MathematicalModel.MathematicalModel(c1.T, c1.d, c1.mu, c1.sigma, c1.g, c1.xi)
+        tests = Tests.Tests(out, Model)
+        tests.test_good()
+        """
+    else:
+        config_list = []
+        bc = Config.Config("am_put1", log)
+        from sklearn.model_selection import ParameterGrid
+
+        for params in ParameterGrid({  # 'internal_neurons'        : [5, 50, 100],
+            'internal_neurons'        : [50],
+            'internal_activation_func': [torch.tanh],
+            'optimizer'               : [optim.Adam],
+            'initial_lernrate'        : [0.01, 0.0001]}):
+            config_list.append(deepcopy(bc))
+            config_list[-1].internal_neurons = params['internal_neurons']
+            config_list[-1].activation1 = params['internal_activation_func']
+            config_list[-1].optimizer = params['optimizer']
+            config_list[-1].lr = params['initial_lernrate']
+        for k in range(len(config_list)):
+            log.info(str(k) + "-th config with parameters: \n" + config_list[k].parameter_string)
+            lokaleMainRoutine = MainRoutine(config_list[k], log, out)
+            final_val_cont, final_val_disc, self.config.parameter_string, train_duration, val_duration, net_net_duration = lokaleMainRoutine.MainSchleife(test, k)
+
+            out.create_net_pdf("net_values_" + str(k) + ".pdf")
 
     log.info("time for everything is %s seconds" % round((time.time() - start_time), 3))
