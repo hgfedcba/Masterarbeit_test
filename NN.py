@@ -75,7 +75,7 @@ class NN:
             net = Net(self.d, self.internal_neurons, self.activation1, self.activation2)
             self.u.append(net)
 
-    def optimization(self, M, J, L):
+    def optimization(self, M, T_max, J, L):
         log = self.log
         np.random.seed(1337)
         torch.manual_seed(1337)
@@ -99,6 +99,8 @@ class NN:
         val_duration = []
         actual_stopping_times_list = []
 
+        optimization_start = time.time()
+
         for l in range(L):
             if not self.antithetic_variables or l < L / 2:
                 val_bm_list.append(self.generate_bm())
@@ -114,7 +116,8 @@ class NN:
 
         br = BestResult()
 
-        for m in range(M):
+        m = 0
+        while (time.time() - optimization_start) / 60 < T_max and (M == -1 or m < M) and br.m + 300 > m:
             self.net_net_duration.append(0)
             m_th_iteration_time = time.time()
 
@@ -131,12 +134,15 @@ class NN:
                     "After \t%s iterations the continuous value is\t %s and the discrete value is \t%s" % (m, round(val_continuous_value_list[-1].item(), 3), round(val_discrete_value_list[-1], 3)))
 
                 if br.val_error_disc < val_discrete_value_list[-1] or (br.val_error_disc == val_discrete_value_list[-1] and br.val_error_cont < val_continuous_value_list[-1]):
-                    br.update(self, m, val_continuous_value_list[-1], val_discrete_value_list[-1], actual_stopping_times_list[-1])
+                    log.info("This is a new best!!!!!")
+                    br.update(self, m, val_continuous_value_list[-1], val_discrete_value_list[-1], actual_stopping_times_list[-1], time.time() - optimization_start)
 
             scheduler.step()  # TODO:verify
 
             if m == 25:
                 assert True
+
+            m += 1
 
         br_bms = []
         br_paths = []
@@ -150,7 +156,7 @@ class NN:
 
         br.paths = br_paths
 
-        return train_individual_payoffs, train_average_payoff, val_continuous_value_list, val_discrete_value_list, val_path_list, actual_stopping_times_list, train_duration, val_duration, self.net_net_duration, br
+        return train_individual_payoffs, train_average_payoff, val_continuous_value_list, val_discrete_value_list, val_path_list, train_duration, val_duration, self.net_net_duration, br
 
     def pretrain(self):
         from torch.autograd import Variable
@@ -271,6 +277,7 @@ class NN:
             actual_stopping_time = np.zeros(self.N + 1)
             actual_stopping_time[tau_list[l]] = 1
             local_list.append(self.calculate_payoffs(actual_stopping_time, val_path_list[l], self.Model.getg, self.t).item())
+            for_debugging5 = local_list[-1]
             actual_stopping_times.append(actual_stopping_time)
 
         val_discrete_value_list.append(sum(local_list) / L)
@@ -298,8 +305,9 @@ class NN:
             part2 = self.Model.getmu(out[:, n]) * (self.t[n + 1] - self.t[n])
             part3 = self.Model.getsigma(out[:, n]) @ (bm[:, n + 1] - bm[:, n])
             out[:, n + 1] = out[:, n] + part2 + part3
-            # out[:, n + 1] = out[:, n] * (1 + part2 + part3)  # TODO: hä
+            # out[:, n + 1] = out[:, n] * (1 + part2 + part3)
 
+        # return self.Sim_Paths_GeoBM(self.Model.getxi(), self.Model.getmu(1), self.Model.getsigma(1), self.Model.getT(), self.N)
         return out
 
     def generate_stopping_time_factors_from_path(self, x_input):
@@ -311,7 +319,7 @@ class NN:
 
         h = []
 
-        # TODO:Parallel?
+        # TODO:Parallel? NO!
 
         for n in range(local_N):
             if n > 0:
@@ -340,6 +348,29 @@ class NN:
         # w = torch.unsqueeze(z, 0)
 
         return z
+
+    """
+    def Sim_Paths_GeoBM(self, X0, mu, sigma, T, N):
+        Delta_t = T / N
+        Delta_W = np.random.normal(0, math.sqrt(Delta_t), (N, 1))
+
+        # Initialize vectors with starting value
+        X_exact = X0 * np.ones(N + 1)
+        X_Euler = X0 * np.ones(N + 1)
+        X_Milshtein = X0 * np.ones(N + 1)
+
+        # Recursive simulation according to the algorithms in Section ?.? using identical Delta_W
+        for i in range(0, N):
+            X_exact[i + 1] = X_exact[i] * np.exp((mu - math.pow(sigma, 2) / 2) * Delta_t + sigma * Delta_W[i])
+            X_Euler[i + 1] = X_Euler[i] * (1 + mu * Delta_t + sigma * Delta_W[i])
+            # X_Euler[i + 1] = X_Euler[i] + mu * Delta_t + sigma * Delta_W[i]
+            X_Milshtein[i + 1] = X_Milshtein[i] * (1 + mu * Delta_t + sigma * Delta_W[i] + math.pow(sigma, 2) / 2 * (math.pow((Delta_W[i]), 2) - Delta_t))
+
+        X_Euler = np.reshape(X_Euler, (1, 11))
+
+        return X_Euler
+        return X_exact, X_Euler, X_Milshtein
+        """
 
     def calculate_payoffs(self, U, x, g, t):
         sum = torch.zeros(1)

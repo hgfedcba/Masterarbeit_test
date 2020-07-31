@@ -1,4 +1,5 @@
 import pathlib
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -36,9 +37,10 @@ class MainRoutine:
         self.log = log
         self.out = out
 
-    def MainSchleife(self, test, iteration_number):
+    def MainSchleife(self, test, iteration_number=0):
         log = self.log
         M = self.config.max_number_iterations  # Number of optimization steps
+        T_max = self.config.max_minutes_for_iteration
         J = self.config.batch_size  # Batchsize
         L = self.config.val_size  # valsize
 
@@ -48,16 +50,15 @@ class MainRoutine:
         self.out.N = self.N
         self.out.generate_stock_price_partition()
 
-        train_individual_payoffs, train_average_payoff, val_continuous_value_list, val_discrete_value_list, val_path_list, actual_stopping_times, train_duration, val_duration, net_net_duration, best_result = self.NN.optimization(
-            M, J,
-            L)
+        train_individual_payoffs, train_average_payoff, val_continuous_value_list, val_discrete_value_list, val_path_list, train_duration, val_duration, net_net_duration, best_result = self.NN.optimization(
+            M, T_max, J, L)
 
         final_val_cont, final_val_disc = best_result.final_validation()
 
-        self.mylog("\n\nLast validation on a set of ", len(best_result.paths), " paths gave a continuous value of ", final_val_cont, " and a discrete value of ", final_val_disc, ".")
+        mylog("\n\nLast validation on a set of ", len(best_result.paths), " paths gave a continuous value of ", final_val_cont, " and a discrete value of ", final_val_disc, ".")
 
-        self.mylog("Overall training took ", sum(train_duration), " seconds and validation took ", sum(val_duration), " seconds. ", sum(net_net_duration),
-                   " of the training time was spend on the net itself.")
+        mylog("Overall training took ", sum(train_duration), " seconds and validation took ", sum(val_duration), " seconds. ", sum(net_net_duration),
+              " of the training time was spend on the net itself.")
 
         if self.config.other_computation_exists:
             log.info("other computation yields: %s", self.config.other_computation)
@@ -70,13 +71,16 @@ class MainRoutine:
         self.out.val_duration = val_duration
         self.out.net_net_duration = net_net_duration
 
+        # TODO: currently i plot the last iteration, not the best iteration
+        # TODO: Two best iterations?
+
         plot_number = int(time.time())
 
         plot_number = self.out.draw_point_graph(val_path_list)
         plt.figure(plot_number)
 
         for k in range(len(val_path_list)):
-            stop_point = np.argmax(actual_stopping_times[-1][k])
+            stop_point = np.argmax(best_result.stopping_times[k])
             plt.scatter(self.config.time_partition[stop_point], val_path_list[k].flatten()[stop_point], marker='o')
 
         # plt.ylim([10, 50])
@@ -85,25 +89,25 @@ class MainRoutine:
         else:
             out.save_fig_in_pdf(plt.figure(plot_number), "Paths" + str(iteration_number) + ".pdf")
 
-        # TODO: return final value x2 + parameterstring + meta information string, time/losses etc
+        return iteration_number, best_result.time_to_best_result, final_val_cont, final_val_disc, self.config.get_parameter_string(), train_duration, val_duration, net_net_duration
 
-        return final_val_cont, final_val_disc, self.config.parameter_string, train_duration, val_duration, net_net_duration
 
-    def mylog(self, *argv):
-        argv = list(argv)
-        for s in range(len(argv)):
-            if isinstance(argv[s], float):
-                argv[s] = round(argv[s], 3)
-        out = ''.join(str(s) for s in argv)
-        out += "\n"
-        self.log.info(out)
+def mylog(*argv, only_return=False):
+    argv = list(argv)
+    for s in range(len(argv)):
+        if isinstance(argv[s], float):
+            argv[s] = round(argv[s], 3)
+    out = ''.join(str(s) + "\t" for s in argv)
+    out += "\n"
+    if not only_return:
+        log.info(out)
+    return out
 
 
 if __name__ == '__main__':
     # filename='example.log'
     # stream=sys.stderr,
-    # TODO: logging outputname mit datum
-    folder_name = "Testrun1"
+    folder_name = "Testrun2"
     working_directory = pathlib.Path().absolute()
     output_location = working_directory / f'{folder_name}'
 
@@ -114,15 +118,17 @@ if __name__ == '__main__':
     log.setLevel(logging.DEBUG)
     # coloredlogs.install(level='DEBUG', fmt='%(asctime)s %(message)s', logger=log) # if i activate this then all the print messages are displayed
 
-    fh = logging.FileHandler('log.log')
+    log_name = time.strftime("%Y.%m.%d-%H.%M.%S") + ".log"
+
+    fh = logging.FileHandler(log_name)
     formatter = logging.Formatter('%(asctime)s %(message)s')
     fh.setFormatter(formatter)
     log.addHandler(fh)
 
     start_time = time.time()
 
-    # test = True
-    test = False
+    test = True
+    # test = False
 
     if test:
         config_time = time.time()
@@ -140,7 +146,7 @@ if __name__ == '__main__':
 
         log.info("time for config is %s seconds" % round((time.time() - config_time), 3))
         for k in range(len(config_list)):
-            log.info(str(k) + "-th config with parameters: \n" + config_list[k].parameter_string)
+            log.info(str(k) + "-th config with parameters: \n" + config_list[k].get_parameter_string())
             lokaleMainRoutine = MainRoutine(config_list[k], log, out)
             lokaleMainRoutine.MainSchleife(test)
 
@@ -153,23 +159,62 @@ if __name__ == '__main__':
     else:
         config_list = []
         bc = Config.Config("am_put1", log)
+
+        result_list = []
         from sklearn.model_selection import ParameterGrid
 
+
+        # TODO:configs
         for params in ParameterGrid({  # 'internal_neurons'        : [5, 50, 100],
-            'internal_neurons'        : [50],
-            'internal_activation_func': [torch.tanh],
+            'internal_neurons'        : [5, 50, 100],
+            # torch.tanh,
+            'internal_activation_func': [torch.tanh, torch.sigmoid],
             'optimizer'               : [optim.Adam],
-            'initial_lernrate'        : [0.01, 0.0001]}):
+            'initial_lernrate'        : [0.0001]}):
             config_list.append(deepcopy(bc))
             config_list[-1].internal_neurons = params['internal_neurons']
             config_list[-1].activation1 = params['internal_activation_func']
             config_list[-1].optimizer = params['optimizer']
             config_list[-1].lr = params['initial_lernrate']
         for k in range(len(config_list)):
-            log.info(str(k) + "-th config with parameters: \n" + config_list[k].parameter_string)
+            log.info(str(k) + "-th config with parameters: \n" + config_list[k].get_parameter_string())
             lokaleMainRoutine = MainRoutine(config_list[k], log, out)
-            final_val_cont, final_val_disc, self.config.parameter_string, train_duration, val_duration, net_net_duration = lokaleMainRoutine.MainSchleife(test, k)
+            # k, final_val_cont, final_val_disc, parameter_string, train_duration, val_duration, net_net_duration = lokaleMainRoutine.MainSchleife(test, k)
+            result_list.append(lokaleMainRoutine.MainSchleife(test, k))
 
             out.create_net_pdf("net_values_" + str(k) + ".pdf")
+
+
+        def resultlist_to_resultstring(list):
+            """
+            output_string = str(list[0]), "discrete val value: ", list[2], "cont val value:", list[1], "time spend training:", sum(list[4]), "time spend validating:", sum(
+                list[5]), "time spend on net:", sum(list[6]), "Parameterstring:", list[3]
+            output_string = ''.join(str(s) + "\t" for s in output_string)
+            output_string += "\n"
+            """
+            output_string = mylog("\tThis is the ", str(list[0]), "-th run.", "discrete val value: ", list[3], "cont val value:", list[2], "time to best result:", list[1], "time spend training:",
+                                  sum(list[5]), "time spend validating:", sum(list[6]), "time spend on net:", sum(list[7]), "Parameterstring:", list[4], only_return=True)
+            return output_string
+
+
+        def sort_by_first_value(list):
+            return -list[1]
+
+
+        """
+        import os
+
+        print(os.getcwd())
+        """
+        result_list.sort(key=sort_by_first_value)
+        # filepath = "C:/Users/Oliver/Desktop/MasterarbeitMathe/runs/Testrun1/"
+        # f = open(filepath + "end_result.txt", "w")
+        f = open("end_result.txt", "w")
+        # f.write("Optimization time: "+ "{0:.2f}".format(learning_max_time / 3600) +" h. Runs are sorted by val-rel error:\n")
+        f.write("Optimization time: 0.5 h. Runs are sorted by cont:\n")
+        for k in result_list:
+            f.write(resultlist_to_resultstring(k))
+
+        f.close()
 
     log.info("time for everything is %s seconds" % round((time.time() - start_time), 3))

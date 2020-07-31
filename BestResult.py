@@ -2,15 +2,16 @@ class BestResult:
     def __init__(self):
         self.val_error_cont = 0
         self.val_error_disc = 0
-
+        self.m = 0
         self.paths = 0
 
-    def update(self, NN, m, val_error_cont, val_error_disc, stopping_times):
+    def update(self, NN, m, val_error_cont, val_error_disc, stopping_times, time_to_best_result):
         self.NN = NN
         self.m = m
         self.val_error_cont = val_error_cont
         self.val_error_disc = val_error_disc
         self.stopping_times = stopping_times
+        self.time_to_best_result = time_to_best_result
 
     def final_validation(self):
         return self.NN.validate([], self.paths, [], [], [])
