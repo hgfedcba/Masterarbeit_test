@@ -97,7 +97,7 @@ class Config:
 
             self.stop_paths_in_plot = True  # TODO:use
 
-            self.max_number_iterations = 51
+            self.max_number_iterations = 31
             self.max_minutes_for_iteration = 5
             self.batch_size = 16
             self.val_size = 32
@@ -109,24 +109,13 @@ class Config:
             self.lr_sheduler_breakpoints = [100, 1000, 10000, 100000]
             self.random_seed = 23343
 
-            def generate_partition(T):
-                out = np.zeros(self.N + 1)
-
-                for n in range(self.N):
-                    out[n + 1] = (n + 1) * T / self.N
-                    assert out[n] != out[n + 1]
-
-                return out
-
-            self.time_partition = generate_partition(self.T)  # 0=t_0<...<t_N=T
-
             self.d = 1  # dimension
             # TODO: diskontieren?!
             self.r = 0.05  # interest rate
             self.K = 40  # strike price
             self.delta = 0  # dividend rate
 
-            self.sigma_constant = 0.15
+            self.sigma_constant = 0.25
 
             self.sigma = self.sigma_c_x
 

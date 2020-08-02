@@ -28,14 +28,22 @@ class MainRoutine:
     def __init__(self, config, log, out):
         np.random.seed(seed=config.random_seed)
 
-        self.Model = MathematicalModel.MathematicalModel(config.T, config.d, config.mu, config.sigma, config.g, config.xi)
-        self.NN = NN.NN(config, self.Model, log, out)
+        self.out = out
         self.config = config
 
         self.N = config.N
 
+        self.Model = MathematicalModel.MathematicalModel(config.T, config.d, config.mu, config.sigma, config.g, config.xi)
+
+        self.out.Model = self.Model
+        self.out.config = self.config
+        self.out.T = self.Model.getT()
+        self.out.N = self.N
+        self.out.generate_stock_price_partition()
+
+        self.NN = NN.NN(config, self.Model, log, out)
+
         self.log = log
-        self.out = out
 
     def MainSchleife(self, test, iteration_number=0):
         log = self.log
@@ -43,12 +51,6 @@ class MainRoutine:
         T_max = self.config.max_minutes_for_iteration
         J = self.config.batch_size  # Batchsize
         L = self.config.val_size  # valsize
-
-        self.out.Model = self.Model
-        self.out.config = self.config
-        self.out.T = self.Model.getT()
-        self.out.N = self.N
-        self.out.generate_stock_price_partition()
 
         train_individual_payoffs, train_average_payoff, val_continuous_value_list, val_discrete_value_list, val_path_list, train_duration, val_duration, net_net_duration, best_result = self.NN.optimization(
             M, T_max, J, L)
@@ -66,28 +68,16 @@ class MainRoutine:
         # NN, Model, config, average_payoff, val_value_list, train_duration, val_duration, net_net_duration):
         self.out.NN = self.NN
         self.out.average_payoff = train_average_payoff
-        self.out.val_value_list = val_continuous_value_list
+        self.out.val_continuous_value_list = val_continuous_value_list
+        self.out.val_discrete_value_list = val_discrete_value_list
         self.out.train_duration = train_duration
         self.out.val_duration = val_duration
         self.out.net_net_duration = net_net_duration
+        self.out.val_path_list = val_path_list
+        self.out.best_result = best_result
 
-        # TODO: currently i plot the last iteration, not the best iteration
         # TODO: Two best iterations?
-
-        plot_number = int(time.time())
-
-        plot_number = self.out.draw_point_graph(val_path_list)
-        plt.figure(plot_number)
-
-        for k in range(len(val_path_list)):
-            stop_point = np.argmax(best_result.stopping_times[k])
-            plt.scatter(self.config.time_partition[stop_point], val_path_list[k].flatten()[stop_point], marker='o')
-
-        # plt.ylim([10, 50])
-        if test:
-            show()
-        else:
-            out.save_fig_in_pdf(plt.figure(plot_number), "Paths" + str(iteration_number) + ".pdf")
+        out.generate_metric_pdf(test, iteration_number)
 
         return iteration_number, best_result.time_to_best_result, final_val_cont, final_val_disc, self.config.get_parameter_string(), train_duration, val_duration, net_net_duration
 

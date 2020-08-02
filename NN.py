@@ -49,7 +49,7 @@ class NN:
         self.d = config.d
         self.u = []
         self.Model = Model
-        self.t = config.time_partition
+        self.t = Model.get_time_partition(self.N)
         self.net_net_duration = []
         self.final_val_size = config.final_val_size
 
@@ -131,7 +131,7 @@ class NN:
                 self.validate(val_individual_payoffs, val_path_list, val_continuous_value_list, val_discrete_value_list, actual_stopping_times_list)
                 val_duration[-1] = time.time() - val_duration[-1]
                 log.info(
-                    "After \t%s iterations the continuous value is\t %s and the discrete value is \t%s" % (m, round(val_continuous_value_list[-1].item(), 3), round(val_discrete_value_list[-1], 3)))
+                    "After \t%s iterations the continuous value is\t %s and the discrete value is \t%s" % (m, round(val_continuous_value_list[-1], 3), round(val_discrete_value_list[-1], 3)))
 
                 if br.val_error_disc < val_discrete_value_list[-1] or (br.val_error_disc == val_discrete_value_list[-1] and br.val_error_cont < val_continuous_value_list[-1]):
                     log.info("This is a new best!!!!!")
@@ -281,11 +281,12 @@ class NN:
             actual_stopping_times.append(actual_stopping_time)
 
         val_discrete_value_list.append(sum(local_list) / L)
-        val_continuos_value_list.append(torch.sum(torch.stack(val_individual_payoffs[-1])) / len(val_individual_payoffs[-1]))
+        temp = torch.sum(torch.stack(val_individual_payoffs[-1])) / len(val_individual_payoffs[-1])
+        val_continuos_value_list.append(temp.item())
 
         actual_stopping_times_list.append(actual_stopping_times)
 
-        return val_continuos_value_list[-1].item(), val_discrete_value_list[-1]
+        return val_continuos_value_list[-1], val_discrete_value_list[-1]
 
     def generate_bm(self):
         # Ein Rückgabewert ist ein np.array der entsprechenden Länge, in dem die Werte über den gesamten sample path eingetragen sind

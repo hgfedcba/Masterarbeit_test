@@ -1,6 +1,7 @@
 import time
 import math
 import random
+import numpy as np
 
 
 # noinspection SpellCheckingInspection
@@ -15,6 +16,17 @@ class MathematicalModel:
 
     def getT(self):
         return self.__T
+
+    # TODO: WRONG!
+
+    def get_time_partition(self, N, step_size=1):
+        out = np.zeros(int(N / step_size) + 1)
+
+        for n in range(int(N / step_size)):
+            out[n + 1] = step_size * (n + 1) * self.__T / N
+            # assert out[n] != out[n + 1]
+
+        return out
 
     def getd(self):
         return self.__d

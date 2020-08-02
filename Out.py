@@ -73,6 +73,40 @@ class Output:
 
         pdf.close()
 
+    def generate_metric_pdf(self, test, iteration_number):
+        # TODO: Stop at stopping time
+        pdf = pdfp.PdfPages("Metrics" + str(iteration_number) + ".pdf")
+        plot_number_paths = self.draw_point_graph(self.val_path_list)
+        fig1 = plt.figure(plot_number_paths)
+
+        for k in range(len(self.val_path_list)):
+            stop_point = np.argmax(self.best_result.stopping_times[k])
+            plt.scatter(self.Model.get_time_partition(self.N)[stop_point], self.val_path_list[k].flatten()[stop_point], marker='o')
+        # plt.ylim([10, 50])
+        pdf.savefig(fig1)
+        plt.close(fig1)
+
+        plot_number_value = int(time.time())
+
+        # TODO: different time partitions
+        # TODO: only works if maximum number of iterations reached
+        t = np.linspace(0, int(self.config.max_number_iterations / self.config.validation_frequency), num=int(self.config.max_number_iterations / self.config.validation_frequency) + 1)
+        fig2 = plt.figure(plot_number_value)
+
+        self.draw_point_graph_with_given_partition([np.array(self.val_continuous_value_list)], t, plot_number_value)
+        self.draw_point_graph_with_given_partition([np.array(self.val_discrete_value_list)], t, plot_number_value)
+
+        pdf.savefig(fig2)
+        plt.close(fig2)
+
+        pdf.close()
+        """
+        if test and False:
+            show()
+        else:
+            self.save_fig_in_pdf(plt.figure(plot_number_paths), "Paths" + str(iteration_number) + ".pdf")
+        """
+
     def save_fig_in_pdf(self, fig, name):
         pdf = pdfp.PdfPages(name)
         pdf.savefig(fig)
@@ -90,11 +124,29 @@ class Output:
         xlabel('t', fontsize=16)
         ylabel('x', fontsize=16)
 
-    def draw_point_graph(self, x, plot_number=0):
+    def draw_point_graph(self, x, plot_number=0, step_size=1):
         if plot_number == 0:
             h = time.time()
             plot_number = int(h)
-        self.draw_in_given_plot(x, plot_number, self.config.time_partition)
+        self.draw_in_given_plot(x, plot_number, self.Model.get_time_partition(self.N, step_size))
+        plt.figure(plot_number)
+        grid(True)
+        # show()
+        # plt.close(fig)
+
+        return plot_number
+
+    def draw_point_graph_with_given_partition(self, x, partition, plot_number=0):
+        if plot_number == 0:
+            h = time.time()
+            plot_number = int(h)
+        plt.figure(plot_number)
+        t = partition
+        for l in range(len(x)):
+            h = x[l].flatten()
+            plot(t, x[l].flatten())
+        xlabel('t', fontsize=16)
+        ylabel('x', fontsize=16)
         plt.figure(plot_number)
         grid(True)
         # show()
