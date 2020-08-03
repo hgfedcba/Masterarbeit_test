@@ -86,18 +86,37 @@ class Output:
         pdf.savefig(fig1)
         plt.close(fig1)
 
-        plot_number_value = int(time.time())
-
         # TODO: different time partitions
         # TODO: only works if maximum number of iterations reached
-        t = np.linspace(0, int(self.config.max_number_iterations / self.config.validation_frequency), num=int(self.config.max_number_iterations / self.config.validation_frequency) + 1)
+        t_val = np.linspace(0, self.config.max_number_iterations, num=int(self.config.max_number_iterations / self.config.validation_frequency) + 1)
+        t = np.linspace(0, self.config.max_number_iterations - 1, num=self.config.max_number_iterations)
+        plot_number_value = int(time.time())
         fig2 = plt.figure(plot_number_value)
 
-        self.draw_point_graph_with_given_partition([np.array(self.val_continuous_value_list)], t, plot_number_value)
-        self.draw_point_graph_with_given_partition([np.array(self.val_discrete_value_list)], t, plot_number_value)
+        self.draw_point_graph_with_given_partition([np.array(self.val_continuous_value_list)], t_val, plot_number_value)
+        self.draw_point_graph_with_given_partition([np.array(self.val_discrete_value_list)], t_val, plot_number_value)
+        plt.legend(["cont_value", "disc_value"])
+        plt.axvline(self.best_result.m, color="red")
 
         pdf.savefig(fig2)
         plt.close(fig2)
+
+        plot_number_time = int(time.time())
+        fig3 = plt.figure(plot_number_time)
+
+        self.draw_point_graph_with_given_partition([np.array(self.train_duration)], t, plot_number_time)
+        self.draw_point_graph_with_given_partition([np.array(self.val_duration)], t_val, plot_number_time)
+        self.draw_point_graph_with_given_partition([np.array(self.net_net_duration)], t, plot_number_time)
+        plt.legend(["train", "val", "net_net"])
+        plt.axvline(self.best_result.m, color="red")
+
+        pdf.savefig(fig3)
+        plt.close(fig3)
+
+        # TODO: "loss"
+        # TODO: sum time
+        # TODO: oben zeit unten iteration
+        # TODO: relative weight update
 
         pdf.close()
         """

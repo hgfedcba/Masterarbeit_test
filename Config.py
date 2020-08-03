@@ -97,7 +97,7 @@ class Config:
 
             self.stop_paths_in_plot = True  # TODO:use
 
-            self.max_number_iterations = 31
+            self.max_number_iterations = 51
             self.max_minutes_for_iteration = 5
             self.batch_size = 16
             self.val_size = 32

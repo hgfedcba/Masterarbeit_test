@@ -118,7 +118,7 @@ if __name__ == '__main__':
     start_time = time.time()
 
     test = True
-    # test = False
+    test = False
 
     if test:
         config_time = time.time()
