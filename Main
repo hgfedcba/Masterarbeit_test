@@ -39,7 +39,6 @@ class MainRoutine:
         self.out.config = self.config
         self.out.T = self.Model.getT()
         self.out.N = self.N
-        self.out.generate_stock_price_partition()
 
         self.NN = NN.NN(config, self.Model, log, out)
 
@@ -95,13 +94,24 @@ def mylog(*argv, only_return=False):
 
 
 if __name__ == '__main__':
+    def resultlist_to_resultstring(list):
+        """
+        output_string = str(list[0]), "discrete val value: ", list[2], "cont val value:", list[1], "time spend training:", sum(list[4]), "time spend validating:", sum(
+            list[5]), "time spend on net:", sum(list[6]), "Parameterstring:", list[3]
+        output_string = ''.join(str(s) + "\t" for s in output_string)
+        output_string += "\n"
+        """
+        output_string = mylog("\tThis is the ", str(list[0]), "-th run.", "discrete val value: ", list[3], "cont val value:", list[2], "time to best result:", list[1], "time spend training:",
+                              sum(list[5]), "time spend validating:", sum(list[6]), "time spend on net:", sum(list[7]), "Parameterstring:", list[4], only_return=True)
+        return output_string
+
+
+    def sort_by_first_value(list):
+        return -list[2]
+
+
     # filename='example.log'
     # stream=sys.stderr,
-    folder_name = "Testrun2"
-    working_directory = pathlib.Path().absolute()
-    output_location = working_directory / f'{folder_name}'
-
-    out = Out.Output(output_location)
 
     log = logging.getLogger('l')
     logging.basicConfig(format='%(asctime)s:  %(message)s')
@@ -118,9 +128,14 @@ if __name__ == '__main__':
     start_time = time.time()
 
     test = True
-    test = False
+    # test = False
 
     if test:
+        folder_name = "test"
+        working_directory = pathlib.Path().absolute()
+        output_location = working_directory / f'{folder_name}'
+        out = Out.Output(output_location)
+
         config_time = time.time()
 
         # initialisiere Configs
@@ -147,49 +162,64 @@ if __name__ == '__main__':
         tests.test_good()
         """
     else:
+        folder_name = "Testrun5"
+        working_directory = pathlib.Path().absolute()
+        output_location = working_directory / f'{folder_name}'
+        out = Out.Output(output_location)
+
         config_list = []
         bc = Config.Config("am_put1", log)
 
         result_list = []
         from sklearn.model_selection import ParameterGrid
 
-
         # TODO:configs
         for params in ParameterGrid({  # 'internal_neurons'        : [5, 50, 100],
             'internal_neurons'        : [5, 50, 100],
-            # torch.tanh,
-            'internal_activation_func': [torch.tanh, torch.sigmoid],
+            # TODO: alle aktivierungsfunktionen einmal mit pretrain und einmal ohne
+            'internal_activation_func': [torch.tanh, torch.sigmoid, torch.nn.functional.relu, torch.nn.functional.hardtanh, torch.nn.functional.relu6,
+                                         torch.nn.functional.elu, torch.nn.functional.selu, torch.nn.functional.celu, torch.nn.functional.leaky_relu,
+                                         torch.nn.functional.rrelu, torch.nn.functional.gelu, torch.nn.functional.logsigmoid, torch.nn.functional.hardshrink,
+                                         torch.nn.functional.tanhshrink, torch.nn.functional.softsign, torch.nn.functional.softplus, torch.nn.functional.softmin, torch.nn.functional.softmax,
+                                         torch.nn.functional.softshrink, torch.nn.functional.gumbel_softmax, torch.nn.functional.log_softmax, torch.nn.functional.hardsigmoid],
             'optimizer'               : [optim.Adam],
-            'initial_lernrate'        : [0.0001]}):
+            'initial_lernrate'        : [0.0001],
+            'pretrain'                : [True],
+            'pretrain_iterations'     : [300],
+            'max_iterations'          : [10000],
+            'max_time'                : [10],
+            'batch_size'              : [16],
+            'val_size'                : [64],
+            'final_val'               : [256]}):
+            # TODO: validation frequency
             config_list.append(deepcopy(bc))
             config_list[-1].internal_neurons = params['internal_neurons']
             config_list[-1].activation1 = params['internal_activation_func']
             config_list[-1].optimizer = params['optimizer']
-            config_list[-1].lr = params['initial_lernrate']
+            config_list[-1].initial_lr = params['initial_lernrate']
+            config_list[-1].pretrain = params['pretrain']
+            config_list[-1].pretrain_iterations = params['pretrain_iterations']
+            config_list[-1].max_number_iterations = params['max_iterations']
+            config_list[-1].max_minutes_for_iteration = params['max_time']
+            config_list[-1].batch_size = params['batch_size']
+            config_list[-1].val_size = params['val_size']
+            config_list[-1].final_val_size = params['final_val']
+
         for k in range(len(config_list)):
             log.info(str(k) + "-th config with parameters: \n" + config_list[k].get_parameter_string())
             lokaleMainRoutine = MainRoutine(config_list[k], log, out)
             # k, final_val_cont, final_val_disc, parameter_string, train_duration, val_duration, net_net_duration = lokaleMainRoutine.MainSchleife(test, k)
             result_list.append(lokaleMainRoutine.MainSchleife(test, k))
 
+            f = open("intermediate_result.txt", "w")
+            # f.write("Optimization time: "+ "{0:.2f}".format(learning_max_time / 3600) +" h. Runs are sorted by val-rel error:\n")
+            f.write("Optimization time: " + str(config_list[0].max_minutes_for_iteration) + " min. Other value is: " + str(config_list[0].other_computation) + ".\n")
+            for j in result_list:
+                f.write(resultlist_to_resultstring(j))
+
+            f.close()
+
             out.create_net_pdf("net_values_" + str(k) + ".pdf")
-
-
-        def resultlist_to_resultstring(list):
-            """
-            output_string = str(list[0]), "discrete val value: ", list[2], "cont val value:", list[1], "time spend training:", sum(list[4]), "time spend validating:", sum(
-                list[5]), "time spend on net:", sum(list[6]), "Parameterstring:", list[3]
-            output_string = ''.join(str(s) + "\t" for s in output_string)
-            output_string += "\n"
-            """
-            output_string = mylog("\tThis is the ", str(list[0]), "-th run.", "discrete val value: ", list[3], "cont val value:", list[2], "time to best result:", list[1], "time spend training:",
-                                  sum(list[5]), "time spend validating:", sum(list[6]), "time spend on net:", sum(list[7]), "Parameterstring:", list[4], only_return=True)
-            return output_string
-
-
-        def sort_by_first_value(list):
-            return -list[1]
-
 
         """
         import os

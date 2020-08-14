@@ -1,7 +1,7 @@
 class BestResult:
     def __init__(self):
-        self.val_error_cont = 0
-        self.val_error_disc = 0
+        self.val_error_cont = -1
+        self.val_error_disc = -1
         self.m = 0
         self.paths = 0
 

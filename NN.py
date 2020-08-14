@@ -42,8 +42,9 @@ class NN:
     def __init__(self, config, Model, log, out):
 
         self.log = log
-        self.lr = config.lr  # Lernrate
-        self.lr_sheduler_breakpoints = config.lr_sheduler_breakpoints
+        self.initial_lr = config.initial_lr  # Lernrate
+        self.lr_multiplicative_factor = config.lr_multiplicative_factor
+        self.do_lr_decay = config.do_lr_decay
         self.nu = config.N * (2 * config.d + 1) * (config.d + 1)
         self.N = config.N
         self.d = config.d
@@ -61,6 +62,10 @@ class NN:
         self.validation_frequency = config.validation_frequency
         self.antithetic_variables = config.antithetic_variables
 
+        self.algorithm = config.algorithm
+
+        self.config = config
+
         self.out = out
 
         # TODO: use this
@@ -76,6 +81,7 @@ class NN:
             self.u.append(net)
 
     def optimization(self, M, T_max, J, L):
+        # TODO:value not consistent for higher dimension
         log = self.log
         np.random.seed(1337)
         torch.manual_seed(1337)
@@ -88,8 +94,11 @@ class NN:
         params = []
         for k in range(len(self.u)):
             params += list(self.u[k].parameters())
-        optimizer = self.optimizer(params, lr=self.lr)
-        scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=self.lr_sheduler_breakpoints, gamma=self.lr)
+        optimizer = self.optimizer(params, lr=self.initial_lr)
+        # scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=self.lr_sheduler_breakpoints, gamma=self.initial_lr)
+        if self.do_lr_decay:
+            scheduler = torch.optim.lr_scheduler.MultiplicativeLR(optimizer, self.lr_multiplicative_factor)
+            scheduler.verbose = True
 
         val_bm_list = []
         val_path_list = []
@@ -109,7 +118,8 @@ class NN:
             val_path_list.append(self.generate_path(val_bm_list[l]))
 
         pretrain_start = time.time()
-        self.pretrain()
+        if self.config.pretrain:
+            self.pretrain(self.config.pretrain_func, self.config.pretrain_iterations)
         log.info("pretrain took \t%s seconds" % (time.time() - pretrain_start))
 
         train_duration = []
@@ -117,13 +127,14 @@ class NN:
         br = BestResult()
 
         m = 0
-        while (time.time() - optimization_start) / 60 < T_max and (M == -1 or m < M) and br.m + 300 > m:
+        while m % self.validation_frequency != 0 or ((time.time() - optimization_start) / 60 < T_max and (M == -1 or m < M) and br.m + 300 > m):
             self.net_net_duration.append(0)
             m_th_iteration_time = time.time()
 
             train_duration.append(time.time())
             self.train(optimizer, train_individual_payoffs, train_average_payoff, J, m)
             train_duration[m] = time.time() - train_duration[m]
+            # TODO: deactivate requires grad
 
             # validation
             if m % self.validation_frequency == 0:
@@ -137,12 +148,15 @@ class NN:
                     log.info("This is a new best!!!!!")
                     br.update(self, m, val_continuous_value_list[-1], val_discrete_value_list[-1], actual_stopping_times_list[-1], time.time() - optimization_start)
 
-            scheduler.step()  # TODO:verify
+            if self.do_lr_decay:
+                scheduler.step()
 
             if m == 25:
                 assert True
 
             m += 1
+
+        log.info("Last Validation begins: ")
 
         br_bms = []
         br_paths = []
@@ -158,48 +172,51 @@ class NN:
 
         return train_individual_payoffs, train_average_payoff, val_continuous_value_list, val_discrete_value_list, val_path_list, train_duration, val_duration, self.net_net_duration, br
 
-    def pretrain(self):
+    def pretrain(self, pretrain_func, iterations):
         from torch.autograd import Variable
+        f_x = pretrain_func
         import matplotlib.pyplot as plt
         for m in range(len(self.u)):
-            def f_x(x):
-                # reasonable
-                # return (torch.relu(38 - x) / 30)
-                """
-                # overly accurate
-                h1 = -torch.relu(28 - x) / 10
-                h2 = torch.relu(x - 38) / 10
-                h3 = (38 - x) / 10
-                h4 = h1 + h2 + h3 + 3.8
-                return h4
-                """
-                return (36 - x) / 15 + torch.relu(x - 36) / 15 - torch.relu(21 - x) / 15
 
+            n_samples = 31
+            # n_samples = 5
 
-            x_values = np.ones((31, 1))
-            for i in range(0, 31):
-                x_values[i] = i + 20  # True
+            x_values = np.ones((n_samples, self.d))
+            for i in range(0, n_samples):
+                x_values[i] = np.ones(self.d) * (i + 20)  # True
 
             net = self.u[m]
 
             optimizer = optim.Adam(net.parameters(), lr=0.01)
             scheduler = optim.lr_scheduler.ExponentialLR(optimizer, 0.99)
-            epochs = 800
+            epochs = iterations  # 800
 
             def local_train():
                 net.train()
                 losses = []
+
+                # torch.autograd.set_detect_anomaly(True)
                 for epoch in range(1, epochs):
                     x_train = Variable(torch.from_numpy(x_values)).float()
-                    y_train = f_x(x_train)
-                    y_pred = net(x_train)
-                    loss = ((y_pred - y_train) ** 2).sum()
-                    # print("epoch #", epoch)
-                    # print(loss.item())
-                    losses.append(loss.item())
+                    # x_train = torch.tensor(x_values, requires_grad=True)
+                    y_correct = f_x(x_train)
+                    loss = []
+                    y_pred = []
+                    for l in range(x_train.shape[0]):
+                        y_pred.append(net(x_train[l]))
+                        loss.append((y_pred[l] - y_correct[l]) ** 2)
+
+                    temp = sum(loss)
                     optimizer.zero_grad()
-                    loss.backward()
+                    temp.backward()
                     optimizer.step()
+
+                    losses.append(temp.item())
+                    # print("epoch #", epoch)
+                    # print(losses[-1])
+
+                    if epoch == 100:
+                        assert True
 
                     if losses[-1] < 0.1:
                         break
@@ -207,18 +224,23 @@ class NN:
 
             # print("training start....")
             losses = local_train()
-            """
-            # pretrain loss
-            plt.plot(range(0, losses.__len__()), losses)
-            plt.xlabel("epoch")
-            plt.ylabel("loss train")
-            # plt.ylim([0, 100])
-            plt.show()
-            plt.close()
 
-            # pretrain endergebnis
-            self.out.draw_function(self.u[m])
-            """
+            # noinspection PyUnreachableCode
+            if False:
+                if m == 0:
+                    self.out.draw_function(f_x)
+
+                # pretrain loss
+                plt.plot(range(0, losses.__len__()), losses)
+                plt.xlabel("epoch")
+                plt.ylabel("loss train")
+                # plt.ylim([0, 100])
+                plt.show()
+                plt.close()
+
+                # pretrain endergebnis
+                self.out.draw_function(self.u[m])
+
 
     def train(self, optimizer, individual_payoffs, average_payoff, J, m):
         bm_list = []
@@ -242,7 +264,6 @@ class NN:
         optimizer.zero_grad()
         # torch.autograd.set_detect_anomaly(True)
         loss.backward()
-        # TODO: deactivate requires grad
         t = time.time()
         optimizer.step()
         self.net_net_duration[-1] += time.time() - t
@@ -265,14 +286,7 @@ class NN:
             for_debugging3 = val_individual_payoffs[-1][l]
 
             # part 2: discrete
-            tau_set = np.zeros(self.N + 1)
-            for n in range(tau_set.size):
-                h1 = torch.sum(U[l, 0:n + 1]).item()
-                h2 = 1 - U[l, n].item()
-                h3 = sum(U[l, 0:n + 1]) >= 1 - U[l, n]
-                tau_set[n] = torch.sum(U[l, 0:n + 1]).item() >= 1 - U[l, n].item()
-            tau_list.append(np.argmax(tau_set))  # argmax returns the first "True" entry
-            for_debugging4 = tau_list[l]
+            tau_list.append(self.generate_discrete_stopping_time_from_U(U[l, :]))
 
             actual_stopping_time = np.zeros(self.N + 1)
             actual_stopping_time[tau_list[l]] = 1
@@ -288,12 +302,22 @@ class NN:
 
         return val_continuos_value_list[-1], val_discrete_value_list[-1]
 
+    def generate_discrete_stopping_time_from_U(self, U):
+        # TODO:implement algorithm 1
+        tau_set = np.zeros(self.N + 1)
+        for n in range(tau_set.size):
+            h1 = torch.sum(U[0:n + 1]).item()
+            h2 = 1 - U[n].item()
+            h3 = sum(U[0:n + 1]) >= 1 - U[n]
+            tau_set[n] = torch.sum(U[0:n + 1]).item() >= 1 - U[n].item()
+        tau = np.argmax(tau_set)  # argmax returns the first "True" entry
+        return tau
+
     def generate_bm(self):
         # Ein Rückgabewert ist ein np.array der entsprechenden Länge, in dem die Werte über den gesamten sample path eingetragen sind
         out = np.zeros((self.Model.getd(), self.N + 1))
         for m in range(self.Model.getd()):
             for n in range(self.N):
-                # TODO:verify square root
                 out[m, n + 1] = scipy.stats.norm.rvs(loc=out[m, n], scale=(self.t[n + 1] - self.t[n]) ** 0.5)
 
         return out
@@ -319,65 +343,66 @@ class NN:
         # x = torch.from_numpy(x_input) doesn't work for some reason
 
         h = []
-
         # TODO:Parallel? NO!
+        if self.algorithm == 0:
+            for n in range(local_N):
+                if n > 0:
+                    sum.append(sum[n - 1] + U[n - 1])  # 0...n-1
+                else:
+                    sum.append(0)
+                # x.append(torch.tensor(x_input[:, n], dtype=torch.float32))
+                x.append(torch.tensor(x_input[:, n], dtype=torch.float32, requires_grad=True))
+                if n < self.N:
+                    t = time.time()
+                    h.append(self.u[n](x[n]))
+                    self.net_net_duration[-1] += time.time() - t
+                else:
+                    h.append(torch.ones(1))
+                # max = torch.max(torch.tensor([h1, h2]))
+                # U[n] = max * (torch.ones(1) - sum)
+                U.append(h[n] * (torch.ones(1) - sum[n]))
 
-        for n in range(local_N):
-            if n > 0:
-                sum.append(sum[n - 1] + U[n - 1])  # 0...n-1
-            else:
-                sum.append(0)
-            # x.append(torch.tensor(x_input[:, n], dtype=torch.float32))
-            x.append(torch.tensor(x_input[:, n], dtype=torch.float32, requires_grad=True))
-            if n < self.N:
-                t = time.time()
-                hu = x[n]
-                h.append(self.u[n](x[n]))
-                self.net_net_duration[-1] += time.time() - t
-            else:
-                h.append(1)
-            # max = torch.max(torch.tensor([h1, h2]))
-            # U[n] = max * (torch.ones(1) - sum)
-            U.append(h[n] * (torch.ones(1) - sum[n]))
+            z = torch.stack(U)
+            if torch.sum(z).item() != pytest.approx(1, 0.00001):
+                whatever = torch.sum(z).item()
+                assert True
+            assert torch.sum(z).item() == pytest.approx(1, 0.00001), "Value: " + str(torch.sum(z).item())  # TODO: solve this better
 
-        z = torch.stack(U)
-        if torch.sum(z).item() != pytest.approx(1, 0.00001):
-            whatever = torch.sum(z).item()
-            assert True
-        assert torch.sum(z).item() == pytest.approx(1, 0.00001), "Value: " + str(torch.sum(z).item())  # TODO: solve this better
+            # w = torch.unsqueeze(z, 0)
 
-        # w = torch.unsqueeze(z, 0)
+            return z
+        elif self.algorithm == 1:
+            for n in range(local_N):
+                # x.append(torch.tensor(x_input[:, n], dtype=torch.float32))
+                x.append(torch.tensor(x_input[:, n], dtype=torch.float32, requires_grad=True))
+                if n < self.N:
+                    t = time.time()
+                    h.append(self.u[n](x[n]))
+                    self.net_net_duration[-1] += time.time() - t
+                else:
+                    h.append(torch.ones(1))
+                # max = torch.max(torch.tensor([h1, h2]))
+                # U[n] = max * (torch.ones(1) - sum)
+                U.append(h[n])
 
-        return z
+            z = torch.stack(U)
 
-    """
-    def Sim_Paths_GeoBM(self, X0, mu, sigma, T, N):
-        Delta_t = T / N
-        Delta_W = np.random.normal(0, math.sqrt(Delta_t), (N, 1))
+            # w = torch.unsqueeze(z, 0)
 
-        # Initialize vectors with starting value
-        X_exact = X0 * np.ones(N + 1)
-        X_Euler = X0 * np.ones(N + 1)
-        X_Milshtein = X0 * np.ones(N + 1)
-
-        # Recursive simulation according to the algorithms in Section ?.? using identical Delta_W
-        for i in range(0, N):
-            X_exact[i + 1] = X_exact[i] * np.exp((mu - math.pow(sigma, 2) / 2) * Delta_t + sigma * Delta_W[i])
-            X_Euler[i + 1] = X_Euler[i] * (1 + mu * Delta_t + sigma * Delta_W[i])
-            # X_Euler[i + 1] = X_Euler[i] + mu * Delta_t + sigma * Delta_W[i]
-            X_Milshtein[i + 1] = X_Milshtein[i] * (1 + mu * Delta_t + sigma * Delta_W[i] + math.pow(sigma, 2) / 2 * (math.pow((Delta_W[i]), 2) - Delta_t))
-
-        X_Euler = np.reshape(X_Euler, (1, 11))
-
-        return X_Euler
-        return X_exact, X_Euler, X_Milshtein
-        """
+            return z
 
     def calculate_payoffs(self, U, x, g, t):
-        sum = torch.zeros(1)
+        s = torch.zeros(1)
         for n in range(self.N + 1):
-            sum += U[n] * g(t[n], x[:, n])
-        return sum
+            s += U[n] * g(t[n], x[:, n])
+        if self.algorithm == 1:
+            if type(U).__module__ == np.__name__:
+                v = s / sum(U)
+            else:
+                v = s / torch.sum(U)
+        elif self.algorithm == 0:
+            v = s
+        return v
 
     def rectified_minimum(self, x, const, factor):
         return torch.min(x, const + x * (factor + 100))

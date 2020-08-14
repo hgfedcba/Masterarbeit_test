@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import matplotlib.backends.backend_pdf as pdfp
 import torch
 import os
+import NN
 
 
 class Output:
@@ -43,11 +44,14 @@ class Output:
         """
 
     def generate_stock_price_partition(self):
-        a = min(self.config.xi, self.config.xi + self.Model.getT() * self.Model.getmu(1))
-        b = max(self.config.xi, self.config.xi + self.Model.getT() * self.Model.getmu(1))
-        a = a - 1.5 * self.Model.getT() * self.Model.getsigma(1)
-        b = b + 1.5 * self.Model.getT() * self.Model.getsigma(1)
-        self.stock_price_partition = np.linspace(20, 50, 20)
+        # TODO:properly
+        """
+        a = min(self.config.xi, self.config.xi + self.Model.getT() * self.Model.getmu(np.ones(self.config.d)))
+        b = max(self.config.xi, self.config.xi + self.Model.getT() * self.Model.getmu(np.ones(self.config.d)))
+        a = a - 1.5 * self.Model.getT() * self.Model.getsigma(np.ones(self.config.d))
+        b = b + 1.5 * self.Model.getT() * self.Model.getsigma(np.ones(self.config.d))
+        """
+        self.stock_price_partition = np.linspace(20, 50, 31)
 
     def create_net_pdf(self, name):
         # TODO: copy graph so i only use a copy when it was still open
@@ -60,7 +64,7 @@ class Output:
             c_fig = plt.figure(k)
 
             for j in range(len(t)):
-                h = torch.tensor(np.ones(1) * t[j], dtype=torch.float32)
+                h = torch.tensor(np.ones(self.config.d) * t[j], dtype=torch.float32)
                 x[k][j] = self.NN.u[k](h)
             help = x[k][:]
             plt.ylim([0, 1])  # ylim-max is 0.5 since u is small anyway
@@ -75,21 +79,27 @@ class Output:
 
     def generate_metric_pdf(self, test, iteration_number):
         # TODO: Stop at stopping time
-        pdf = pdfp.PdfPages("Metrics" + str(iteration_number) + ".pdf")
-        plot_number_paths = self.draw_point_graph(self.val_path_list)
-        fig1 = plt.figure(plot_number_paths)
+        # TODO: sensible y-lim
 
-        for k in range(len(self.val_path_list)):
-            stop_point = np.argmax(self.best_result.stopping_times[k])
-            plt.scatter(self.Model.get_time_partition(self.N)[stop_point], self.val_path_list[k].flatten()[stop_point], marker='o')
-        # plt.ylim([10, 50])
-        pdf.savefig(fig1)
-        plt.close(fig1)
+        pdf = pdfp.PdfPages("Metrics" + str(iteration_number) + ".pdf")
+
+        self.generate_stock_price_partition()
+        if self.config.d == 1:
+            plot_number_paths = int(time.time())
+            self.draw_point_graph(self.val_path_list, plot_number_paths)
+            fig1 = plt.figure(plot_number_paths)
+
+            for k in range(len(self.val_path_list)):
+                stop_point = np.argmax(self.best_result.stopping_times[k])
+                plt.scatter(self.Model.get_time_partition(self.N)[stop_point], self.val_path_list[k].flatten()[stop_point], marker='o')
+            plt.ylim([0, 100])  # TODO:dynamic
+            pdf.savefig(fig1)
+            plt.close(fig1)
 
         # TODO: different time partitions
-        # TODO: only works if maximum number of iterations reached
-        t_val = np.linspace(0, self.config.max_number_iterations, num=int(self.config.max_number_iterations / self.config.validation_frequency) + 1)
-        t = np.linspace(0, self.config.max_number_iterations - 1, num=self.config.max_number_iterations)
+        l = len(self.train_duration)
+        t_val = np.linspace(0, l - 1, num=int(l / self.config.validation_frequency))
+        t = np.linspace(0, l - 1, num=l)
         plot_number_value = int(time.time())
         fig2 = plt.figure(plot_number_value)
 
@@ -97,6 +107,7 @@ class Output:
         self.draw_point_graph_with_given_partition([np.array(self.val_discrete_value_list)], t_val, plot_number_value)
         plt.legend(["cont_value", "disc_value"])
         plt.axvline(self.best_result.m, color="red")
+        plt.axhline(self.config.other_computation, color='black')
 
         pdf.savefig(fig2)
         plt.close(fig2)
@@ -113,7 +124,6 @@ class Output:
         pdf.savefig(fig3)
         plt.close(fig3)
 
-        # TODO: "loss"
         # TODO: sum time
         # TODO: oben zeit unten iteration
         # TODO: relative weight update
