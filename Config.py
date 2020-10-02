@@ -80,6 +80,7 @@ class Config:
 
         # TODO: stoppfunktion lernen, nicht u,U
         if string == "am_put1":
+            # TODO: config in 2 teile: setze parameter und nutze diese parameter um mu, etc zu setzen
             # 2 american puts
             self.algorithm = 0  # 0 is source, 1 is mine
 
@@ -99,11 +100,11 @@ class Config:
 
             self.stop_paths_in_plot = True  # TODO:use
 
-            self.max_number_iterations = 51
-            self.max_minutes_for_iteration = 5
+            self.max_number_iterations = 5001
+            self.max_minutes_for_iteration = 50
             self.batch_size = 32
             self.val_size = 64
-            self.final_val_size = 512
+            self.final_val_size = 126
 
             self.T = 10
             self.N = 10
@@ -113,10 +114,7 @@ class Config:
             self.lr_multiplicative_factor = lambda epoch: 0.98
             self.random_seed = 23343
 
-            self.d = 2  # dimension
-            # TODO:different
-            if self.d > 1:
-                self.pretrain = False
+            self.d = 1  # dimension
             self.r = 0.05  # interest rate
             self.K = 40  # strike price
             self.delta = 0  # dividend rate
@@ -127,6 +125,10 @@ class Config:
             # TODO: better in code
             # self.preset_config_4312()
             self.preset_config_4411()
+            
+            # TODO:different
+            if self.d > 1:
+                self.pretrain = False
 
             self.sigma = self.sigma_c_x
             self.mu = self.mu_c_x

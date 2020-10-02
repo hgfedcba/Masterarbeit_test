@@ -1,5 +1,4 @@
 import pathlib
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -11,7 +10,7 @@ from scipy import stats
 import time
 import pytest
 import Out
-from BestResult import BestResult
+from BestResults import BestResults
 
 
 class Net(nn.Module):
@@ -124,10 +123,10 @@ class NN:
 
         train_duration = []
 
-        br = BestResult()
+        br = BestResults(log)
 
         m = 0
-        while m % self.validation_frequency != 0 or ((time.time() - optimization_start) / 60 < T_max and (M == -1 or m < M) and br.m + 300 > m):
+        while m % self.validation_frequency != 0 or ((time.time() - optimization_start) / 60 < T_max and (M == -1 or m < M) and br.get_m_max() + 100 > m):
             self.net_net_duration.append(0)
             m_th_iteration_time = time.time()
 
@@ -144,9 +143,7 @@ class NN:
                 log.info(
                     "After \t%s iterations the continuous value is\t %s and the discrete value is \t%s" % (m, round(val_continuous_value_list[-1], 3), round(val_discrete_value_list[-1], 3)))
 
-                if br.val_error_disc < val_discrete_value_list[-1] or (br.val_error_disc == val_discrete_value_list[-1] and br.val_error_cont < val_continuous_value_list[-1]):
-                    log.info("This is a new best!!!!!")
-                    br.update(self, m, val_continuous_value_list[-1], val_discrete_value_list[-1], actual_stopping_times_list[-1], time.time() - optimization_start)
+                br.process_current_iteration(self, m, val_continuous_value_list[-1], val_discrete_value_list[-1], actual_stopping_times_list[-1], time.time() - optimization_start)
 
             if self.do_lr_decay:
                 scheduler.step()

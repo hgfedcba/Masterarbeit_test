@@ -10,7 +10,6 @@ import NN
 
 
 class Output:
-
     def __init__(self, output_location):
         self.NN = 0
         self.config = 0
@@ -89,12 +88,16 @@ class Output:
             self.draw_point_graph(self.val_path_list, plot_number_paths)
             fig1 = plt.figure(plot_number_paths)
 
+            # TODO: do something with this
+            br = self.best_results.disc_best_result
+
             for k in range(len(self.val_path_list)):
-                stop_point = np.argmax(self.best_result.stopping_times[k])
+                stop_point = np.argmax(br.stopping_times[k])
                 plt.scatter(self.Model.get_time_partition(self.N)[stop_point], self.val_path_list[k].flatten()[stop_point], marker='o')
             plt.ylim([0, 100])  # TODO:dynamic
             pdf.savefig(fig1)
             plt.close(fig1)
+        # TODO: red mark for disc and cont
 
         # TODO: different time partitions
         l = len(self.train_duration)
@@ -106,7 +109,8 @@ class Output:
         self.draw_point_graph_with_given_partition([np.array(self.val_continuous_value_list)], t_val, plot_number_value)
         self.draw_point_graph_with_given_partition([np.array(self.val_discrete_value_list)], t_val, plot_number_value)
         plt.legend(["cont_value", "disc_value"])
-        plt.axvline(self.best_result.m, color="red")
+        plt.axvline(self.best_results.disc_best_result.m, color="red")
+        plt.axvline(self.best_results.cont_best_result.m, color="red")
         plt.axhline(self.config.other_computation, color='black')
 
         pdf.savefig(fig2)
@@ -119,7 +123,8 @@ class Output:
         self.draw_point_graph_with_given_partition([np.array(self.val_duration)], t_val, plot_number_time)
         self.draw_point_graph_with_given_partition([np.array(self.net_net_duration)], t, plot_number_time)
         plt.legend(["train", "val", "net_net"])
-        plt.axvline(self.best_result.m, color="red")
+        plt.axvline(self.best_results.disc_best_result.m, color="red")
+        plt.axvline(self.best_results.cont_best_result.m, color="red")
 
         pdf.savefig(fig3)
         plt.close(fig3)

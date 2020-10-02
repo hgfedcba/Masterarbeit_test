@@ -19,7 +19,6 @@ import logging
 import coloredlogs
 import matplotlib.pyplot as plt
 import matplotlib.backends.backend_pdf as pdfp
-import Tests
 from copy import deepcopy
 import torch.optim as optim
 
@@ -51,12 +50,13 @@ class MainRoutine:
         J = self.config.batch_size  # Batchsize
         L = self.config.val_size  # valsize
 
-        train_individual_payoffs, train_average_payoff, val_continuous_value_list, val_discrete_value_list, val_path_list, train_duration, val_duration, net_net_duration, best_result = self.NN.optimization(
+        train_individual_payoffs, train_average_payoff, val_continuous_value_list, val_discrete_value_list, val_path_list, train_duration, val_duration, net_net_duration, best_results = self.NN.optimization(
             M, T_max, J, L)
 
-        final_val_cont, final_val_disc = best_result.final_validation()
+        br1_val, br2_val = best_results.final_validation()
 
-        mylog("\n\nLast validation on a set of ", len(best_result.paths), " paths gave a continuous value of ", final_val_cont, " and a discrete value of ", final_val_disc, ".")
+        mylog("\n\nLast validation on a set of ", len(best_results.paths), " paths gave a continuous/discrete value of ", br1_val[0], " | ", br1_val[1], "for the continuous br and ", br2_val[0],
+              " | ", br2_val[1], " for the discrete br")
 
         mylog("Overall training took ", sum(train_duration), " seconds and validation took ", sum(val_duration), " seconds. ", sum(net_net_duration),
               " of the training time was spend on the net itself.")
@@ -73,12 +73,10 @@ class MainRoutine:
         self.out.val_duration = val_duration
         self.out.net_net_duration = net_net_duration
         self.out.val_path_list = val_path_list
-        self.out.best_result = best_result
+        self.out.best_results = best_results
 
-        # TODO: Two best iterations?
         out.generate_metric_pdf(test, iteration_number)
-
-        return iteration_number, best_result.time_to_best_result, final_val_cont, final_val_disc, self.config.get_parameter_string(), train_duration, val_duration, net_net_duration
+        return iteration_number, best_results.get_max_time_to_best_result(), br1_val, br2_val, self.config.get_parameter_string(), train_duration, val_duration, net_net_duration
 
 
 def mylog(*argv, only_return=False):
@@ -101,13 +99,14 @@ if __name__ == '__main__':
         output_string = ''.join(str(s) + "\t" for s in output_string)
         output_string += "\n"
         """
-        output_string = mylog("\tThis is the ", str(list[0]), "-th run.", "discrete val value: ", list[3], "cont val value:", list[2], "time to best result:", list[1], "time spend training:",
+        output_string = mylog("\tThis is the ", str(list[0]), "-th run.", "cont val value:", list[2][0], " or ", list[3][0], "discrete val value: ", list[2][1], " or ", list[3][1],
+                              "time to best result:", list[1], "time spend training:",
                               sum(list[5]), "time spend validating:", sum(list[6]), "time spend on net:", sum(list[7]), "Parameterstring:", list[4], only_return=True)
         return output_string
 
 
     def sort_by_first_value(list):
-        return -list[2]
+        return -list[2][1] - list[3][1]
 
 
     # filename='example.log'
@@ -141,6 +140,7 @@ if __name__ == '__main__':
         # initialisiere Configs
         config_list = []
         c1 = Config.Config("am_put1", log)
+        c1.max_number_iterations = 50
         config_list.append(c1)
         """
         c2 = deepcopy(c1)
@@ -174,19 +174,22 @@ if __name__ == '__main__':
         from sklearn.model_selection import ParameterGrid
 
         # TODO:configs
+        """
+        'internal_activation_func': [torch.tanh, torch.sigmoid, torch.nn.functional.relu, torch.nn.functional.hardtanh, torch.nn.functional.relu6,
+                                     torch.nn.functional.elu, torch.nn.functional.selu, torch.nn.functional.celu, torch.nn.functional.leaky_relu,
+                                     torch.nn.functional.rrelu, torch.nn.functional.gelu, torch.nn.functional.logsigmoid, torch.nn.functional.hardshrink,
+                                     torch.nn.functional.tanhshrink, torch.nn.functional.softsign, torch.nn.functional.softplus, torch.nn.functional.softmin, torch.nn.functional.softmax,
+                                     torch.nn.functional.softshrink, torch.nn.functional.gumbel_softmax, torch.nn.functional.log_softmax, torch.nn.functional.hardsigmoid],
+        """
         for params in ParameterGrid({  # 'internal_neurons'        : [5, 50, 100],
             'internal_neurons'        : [5, 50, 100],
             # TODO: alle aktivierungsfunktionen einmal mit pretrain und einmal ohne
-            'internal_activation_func': [torch.tanh, torch.sigmoid, torch.nn.functional.relu, torch.nn.functional.hardtanh, torch.nn.functional.relu6,
-                                         torch.nn.functional.elu, torch.nn.functional.selu, torch.nn.functional.celu, torch.nn.functional.leaky_relu,
-                                         torch.nn.functional.rrelu, torch.nn.functional.gelu, torch.nn.functional.logsigmoid, torch.nn.functional.hardshrink,
-                                         torch.nn.functional.tanhshrink, torch.nn.functional.softsign, torch.nn.functional.softplus, torch.nn.functional.softmin, torch.nn.functional.softmax,
-                                         torch.nn.functional.softshrink, torch.nn.functional.gumbel_softmax, torch.nn.functional.log_softmax, torch.nn.functional.hardsigmoid],
+            'internal_activation_func': [torch.tanh, torch.sigmoid],
             'optimizer'               : [optim.Adam],
             'initial_lernrate'        : [0.0001],
             'pretrain'                : [True],
             'pretrain_iterations'     : [300],
-            'max_iterations'          : [10000],
+            'max_iterations'          : [10],  # TODO
             'max_time'                : [10],
             'batch_size'              : [16],
             'val_size'                : [64],
