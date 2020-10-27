@@ -181,7 +181,6 @@ class Output:
             plot(t, x[l].flatten())
         xlabel('t', fontsize=16)
         ylabel('x', fontsize=16)
-        plt.figure(plot_number)
         grid(True)
         # show()
         # plt.close(fig)

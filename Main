@@ -21,6 +21,7 @@ import matplotlib.pyplot as plt
 import matplotlib.backends.backend_pdf as pdfp
 from copy import deepcopy
 import torch.optim as optim
+from sklearn.model_selection import ParameterGrid
 
 
 class MainRoutine:
@@ -55,7 +56,8 @@ class MainRoutine:
 
         br1_val, br2_val = best_results.final_validation()
 
-        mylog("\n\nLast validation on a set of ", len(best_results.paths), " paths gave a continuous/discrete value of ", br1_val[0], " | ", br1_val[1], "for the continuous br and ", br2_val[0],
+        mylog("\n\nLast validation on a set of ", len(best_results.paths_for_final_val), " paths gave a continuous/discrete value of ", br1_val[0], " | ", br1_val[1], "for the continuous br and ",
+              br2_val[0],
               " | ", br2_val[1], " for the discrete br")
 
         mylog("Overall training took ", sum(train_duration), " seconds and validation took ", sum(val_duration), " seconds. ", sum(net_net_duration),
@@ -171,7 +173,6 @@ if __name__ == '__main__':
         bc = Config.Config("am_put1", log)
 
         result_list = []
-        from sklearn.model_selection import ParameterGrid
 
         # TODO:configs
         """

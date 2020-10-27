@@ -2,16 +2,16 @@ class BestResults:
     def __init__(self, log):
         self.cont_best_result = IndividualBestResult()
         self.disc_best_result = IndividualBestResult()
-        self.paths = 0
+        self.paths_for_final_val = 0
         self.log = log
 
-    def process_current_iteration(self, NN, m, val_cont_value, val_disc_value, stopping_times, time_to_best_result):
+    def process_current_iteration(self, NN, m, val_cont_value, val_disc_value, stopping_times, total_time_used):
         if val_cont_value > self.cont_best_result.cont_value or (val_cont_value == self.cont_best_result.cont_value and val_disc_value > self.cont_best_result.disc_value):
-            self.cont_best_result.update(NN, m, val_cont_value, val_disc_value, stopping_times, time_to_best_result)
+            self.cont_best_result.update(NN, m, val_cont_value, val_disc_value, stopping_times, total_time_used)
             self.log.info("This is a new cont best!!!!!")
 
         if val_disc_value > self.disc_best_result.disc_value or (val_disc_value == self.disc_best_result.disc_value and val_cont_value > self.disc_best_result.cont_value):
-            self.disc_best_result.update(NN, m, val_cont_value, val_disc_value, stopping_times, time_to_best_result)
+            self.disc_best_result.update(NN, m, val_cont_value, val_disc_value, stopping_times, total_time_used)
             self.log.info("This is a new disc best!!!!!")
 
     def get_m_max(self):
@@ -21,7 +21,7 @@ class BestResults:
         return max(self.cont_best_result.time_to_best_result, self.disc_best_result.time_to_best_result)
 
     def final_validation(self):
-        return self.cont_best_result.final_validation(self.paths), self.disc_best_result.final_validation(self.paths)
+        return self.cont_best_result.final_validation(self.paths_for_final_val), self.disc_best_result.final_validation(self.paths_for_final_val)
 
 
 class IndividualBestResult:
@@ -29,6 +29,9 @@ class IndividualBestResult:
         self.cont_value = -1
         self.disc_value = -1
         self.m = 0
+        self.NN = None
+        self.stopping_times = None
+        self.time_to_best_result = None
 
     def update(self, NN, m, val_cont_value, val_disc_value, stopping_times, time_to_best_result):
         self.NN = NN

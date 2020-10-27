@@ -165,7 +165,7 @@ class NN:
                 br_bms.extend([-item for item in br_bms])
             br_paths.append(self.generate_path(br_bms[l]))
 
-        br.paths = br_paths
+        br.paths_for_final_val = br_paths
 
         return train_individual_payoffs, train_average_payoff, val_continuous_value_list, val_discrete_value_list, val_path_list, train_duration, val_duration, self.net_net_duration, br
 

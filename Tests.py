@@ -7,7 +7,6 @@ import scipy
 import math
 from scipy import stats
 import time
-import pytest
 
 
 class Tests:
